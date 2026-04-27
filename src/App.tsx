@@ -11,6 +11,11 @@ import {
   getApiKey,
   type AiUsage,
 } from './domain/openai';
+import {
+  getUiSettings,
+  subscribeUiSettings,
+  type UiSettings,
+} from './domain/uiSettings';
 import './App.css';
 
 setAiProvider(openaiAiProvider);
@@ -19,19 +24,30 @@ export default function App() {
   const [usage, setUsage] = useState<AiUsage>(() => readUsage());
   const [hasKey, setHasKey] = useState(() => !!getApiKey());
   const [showSettings, setShowSettings] = useState(false);
+  const [ui, setUi] = useState<UiSettings>(() => getUiSettings());
   useEffect(() => {
     const onU = (e: Event) =>
       setUsage((e as CustomEvent<AiUsage>).detail ?? readUsage());
     const onK = () => setHasKey(!!getApiKey());
     window.addEventListener('nsi:ai-usage', onU);
     window.addEventListener('nsi:ai-key-changed', onK);
+    const off = subscribeUiSettings(setUi);
     return () => {
       window.removeEventListener('nsi:ai-usage', onU);
       window.removeEventListener('nsi:ai-key-changed', onK);
+      off();
     };
   }, []);
 
-  return <Inner usage={usage} hasKey={hasKey} setShowSettings={setShowSettings} showSettings={showSettings} />;
+  return (
+    <Inner
+      usage={usage}
+      hasKey={hasKey}
+      setShowSettings={setShowSettings}
+      showSettings={showSettings}
+      ui={ui}
+    />
+  );
 }
 
 function Inner({
@@ -39,12 +55,15 @@ function Inner({
   hasKey,
   setShowSettings,
   showSettings,
+  ui,
 }: {
   usage: AiUsage;
   hasKey: boolean;
   setShowSettings: (b: boolean) => void;
   showSettings: boolean;
+  ui: UiSettings;
 }) {
+  const selectedModelId = useStore((s) => s.selectedModelId);
   const models = useStore((s) => s.models);
   const classifier = useStore((s) => s.classifier);
   const stats = useMemo(() => {
@@ -114,16 +133,21 @@ function Inner({
           onClick={() => setShowSettings(true)}
           title={
             hasKey
-              ? `Настройки ИИ · ${usage.requests} запросов · $${usage.costUsd.toFixed(4)}`
-              : 'Подключить ИИ (OpenAI API ключ)'
+              ? `Настройки · ИИ ${usage.requests} запросов · $${usage.costUsd.toFixed(4)}`
+              : 'Настройки (картинки, ИИ-ключ и т.п.)'
           }
           style={{ marginLeft: 12 }}
         >
-          ИИ {hasKey ? `· $${usage.costUsd.toFixed(4)}` : '·  выкл'}
+          Настройки {hasKey ? `· ИИ $${usage.costUsd.toFixed(4)}` : '· ИИ выкл'}
         </button>
       </header>
       <Toolbar />
-      <main className="layout">
+      <main
+        className={
+          'layout' +
+          (ui.modelCardFullscreen && selectedModelId ? ' fullscreen-card' : '')
+        }
+      >
         <aside className="left">
           <Tree />
         </aside>

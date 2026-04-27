@@ -47,6 +47,8 @@ export interface EquipmentModel {
   techCard?: TechCardRow[];
   /** История отказов (для расчёта надёжности). */
   failures?: FailureRecord[];
+  /** Картинка модели — URL или data:URI. Опционально, скрывается в настройках. */
+  imageUrl?: string;
   /** Оценка качества данных. */
   validity?: {
     expertVerified: boolean;

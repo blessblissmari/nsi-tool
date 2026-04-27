@@ -490,3 +490,44 @@ select:focus {
   margin: 0 0 6px;
   color: var(--fg);
 }
+
+/* Fullscreen режим карточки модели — скрываем дерево, карточка занимает всю ширину. */
+.layout.fullscreen-card .left {
+  display: none;
+}
+.model-card.is-fullscreen {
+  position: fixed;
+  inset: 50px 0 0 0;
+  z-index: 30;
+  margin: 0;
+  border: 0;
+  background: var(--bg);
+  overflow: auto;
+  padding: 8px 12px 24px;
+}
+
+/* Картинка модели в шапке карточки. */
+.model-card .model-thumb {
+  width: 28px;
+  height: 28px;
+  object-fit: cover;
+  border: 1px solid var(--border);
+  background: var(--bg-alt);
+}
+
+/* Превью картинки в свойствах. */
+.model-image-box {
+  width: 140px;
+  height: 100px;
+  border: 1px solid var(--border);
+  background: var(--bg-alt);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+.model-image-box img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}

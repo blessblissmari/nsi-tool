@@ -1,5 +1,11 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useStore } from '../store';
+import {
+  getUiSettings,
+  setUiSettings,
+  subscribeUiSettings,
+  type UiSettings,
+} from '../domain/uiSettings';
 import { normalizeModelCode } from '../domain/normalize';
 import { classifyModel } from '../domain/classify';
 import {
@@ -52,6 +58,11 @@ export function ModelCard({ modelId }: { modelId: string }) {
   const update = useStore((s) => s.updateModel);
   const remove = useStore((s) => s.deleteModel);
   const [tab, setTab] = useState<Tab>('props');
+  const [ui, setUi] = useState<UiSettings>(() => getUiSettings());
+  useEffect(() => subscribeUiSettings(setUi), []);
+  const fullscreen = ui.modelCardFullscreen;
+  const toggleFullscreen = () =>
+    setUiSettings({ modelCardFullscreen: !fullscreen });
 
   const norm = useMemo(
     () => (model ? normalizeModelCode(model.rawCode) : null),
@@ -65,8 +76,18 @@ export function ModelCard({ modelId }: { modelId: string }) {
   const code = model.normalizedCode || model.rawCode;
 
   return (
-    <div className="card model-card">
+    <div className={`card model-card${fullscreen ? ' is-fullscreen' : ''}`}>
       <div className="card-head">
+        {ui.showModelImages && model.imageUrl && (
+          <img
+            src={model.imageUrl}
+            alt=""
+            className="model-thumb"
+            onError={(e) => {
+              (e.currentTarget as HTMLImageElement).style.display = 'none';
+            }}
+          />
+        )}
         <span className="muted small">Модель</span>
         <h3 className="mono code-title">{code}</h3>
         {model.className && (
@@ -76,6 +97,16 @@ export function ModelCard({ modelId }: { modelId: string }) {
           </span>
         )}
         <span className="spacer" />
+        <button
+          onClick={toggleFullscreen}
+          title={
+            fullscreen
+              ? 'Свернуть карточку обратно к дереву'
+              : 'Развернуть карточку на весь экран (отдельно от иерархии)'
+          }
+        >
+          {fullscreen ? '⤤ К дереву' : '⛶ На весь экран'}
+        </button>
         <button className="danger" onClick={() => remove(model.id)}>
           Удалить
         </button>
@@ -169,6 +200,16 @@ export function ModelCard({ modelId }: { modelId: string }) {
           }}
         >
           <button onClick={addBlankRow}>+ строка</button>
+          <button
+            onClick={toggleFullscreen}
+            title={
+              fullscreen
+                ? 'Свернуть техкарту обратно к дереву'
+                : 'Открыть техкарту на весь экран (отдельно от иерархии)'
+            }
+          >
+            {fullscreen ? '⤤ К дереву' : '⛶ На весь экран'}
+          </button>
           <span className="muted small">
             {rows.length} строк{ops.length ? ` · справочник операций: ${ops.length}` : ''}
             {specs.length ? ` · специальностей: ${specs.length}` : ''}
@@ -184,6 +225,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
                 <th style={{ width: 160 }}>Компонент</th>
                 <th style={{ width: 200 }}>Операция</th>
                 <th style={{ width: 100 }}>ВВ</th>
+                <th style={{ width: 80 }}>Период, ч</th>
                 <th style={{ width: 140 }}>Профессия</th>
                 <th style={{ width: 70 }}>Разряд</th>
                 <th style={{ width: 70 }}>Норм-ч</th>
@@ -197,7 +239,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
             <tbody>
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={11} className="muted small">
+                  <td colSpan={12} className="muted small">
                     Нет строк. Добавьте «+ строка» либо привяжите ВВ
                     (вкладка «ВВ»). Справочники операций, специальностей и
                     стандартных операций — через «Загрузить».
@@ -247,9 +289,18 @@ export function ModelCard({ modelId }: { modelId: string }) {
                         {acts.map((a) => (
                           <option key={a.id} value={a.id}>
                             {a.name}
+                            {a.periodHours
+                              ? ` · ${a.periodHours} ч`
+                              : ''}
                           </option>
                         ))}
                       </select>
+                    </td>
+                    <td className="muted small mono">
+                      {(() => {
+                        const a = acts.find((x) => x.id === r.actionId);
+                        return a?.periodHours ? a.periodHours : '—';
+                      })()}
                     </td>
                     <td>
                       <input
@@ -670,17 +721,26 @@ export function ModelCard({ modelId }: { modelId: string }) {
       );
     }
 
+    // Целевая единица (из приоритетных характеристик класса/подкласса).
+    const targetUnitFor = (key: string): string | undefined => {
+      const inSub = (sub?.priorityChars ?? []).find((p) => p.key === key);
+      if (inSub?.unit) return inSub.unit;
+      const inCls = (cls?.priorityChars ?? []).find((p) => p.key === key);
+      return inCls?.unit;
+    };
+
     return (
       <div>
         <div className="muted small" style={{ marginBottom: 6 }}>
           Аналоги по {sameSub.length > 0 ? 'подклассу' : 'классу'}: {ranked.length}.
-          Скор — близость значений приоритетных характеристик (0..1).
+          Сравнение по приоритетным характеристикам класса/подкласса.
         </div>
         <div style={{ overflowX: 'auto' }}>
           <table className="models">
             <thead>
               <tr>
                 <th style={{ width: 200 }}>Характеристика</th>
+                <th style={{ width: 60 }}>Ед.</th>
                 <th style={{ width: 100 }}>Текущая</th>
                 {ranked.map((r) => (
                   <th key={r.m.id} style={{ width: 100 }}>
@@ -688,22 +748,15 @@ export function ModelCard({ modelId }: { modelId: string }) {
                   </th>
                 ))}
               </tr>
-              <tr className="muted small">
-                <td>Скор / совпадений</td>
-                <td>—</td>
-                {ranked.map((r) => (
-                  <td key={r.m.id}>
-                    {(r.score * 100).toFixed(0)}% / {r.matched}
-                  </td>
-                ))}
-              </tr>
             </thead>
             <tbody>
               {priorityKeys.map((k) => {
                 const a = (m.characteristics ?? []).find((c) => c.key === k);
+                const targetUnit = targetUnitFor(k);
                 return (
                   <tr key={k}>
                     <td>{k}</td>
+                    <td className="muted small mono">{targetUnit ?? '—'}</td>
                     <td className="mono">
                       {a
                         ? `${a.valueRaw}${a.unit ? ' ' + a.unit : ''}`
@@ -925,6 +978,75 @@ export function ModelCard({ modelId }: { modelId: string }) {
     );
   }
 
+  function ImageField({ modelId }: { modelId: string }) {
+    const m = useStore((s) => s.models.find((x) => x.id === modelId));
+    const [ui, setUi] = useState<UiSettings>(() => getUiSettings());
+    useEffect(() => subscribeUiSettings(setUi), []);
+    if (!m) return null;
+    if (!ui.showModelImages) {
+      return (
+        <div className="grid2-full muted small" style={{ marginTop: 4 }}>
+          Картинка модели скрыта (тоггл в «Настройках» → «Показывать
+          картинки моделей»).
+        </div>
+      );
+    }
+    const onFile = async (f?: File | null) => {
+      if (!f) return;
+      const url = await new Promise<string>((resolve, reject) => {
+        const fr = new FileReader();
+        fr.onload = () => resolve(String(fr.result));
+        fr.onerror = () => reject(fr.error ?? new Error('FileReader'));
+        fr.readAsDataURL(f);
+      });
+      update(m.id, { imageUrl: url });
+    };
+    return (
+      <div className="grid2-full" style={{ marginTop: 4 }}>
+        <div className="muted small" style={{ marginBottom: 4 }}>
+          Картинка модели (URL или файл, опционально)
+        </div>
+        <div className="row-flex" style={{ gap: 6, alignItems: 'flex-start' }}>
+          <div className="model-image-box">
+            {m.imageUrl ? (
+              <img src={m.imageUrl} alt="" />
+            ) : (
+              <span className="muted small">нет картинки</span>
+            )}
+          </div>
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <input
+              placeholder="https://... или data:image/..."
+              value={m.imageUrl ?? ''}
+              onChange={(e) =>
+                update(m.id, { imageUrl: e.target.value || undefined })
+              }
+            />
+            <div className="row-flex" style={{ gap: 6 }}>
+              <label className="btn-as-label">
+                Загрузить файл
+                <input
+                  type="file"
+                  accept="image/*"
+                  style={{ display: 'none' }}
+                  onChange={(e) => onFile(e.target.files?.[0])}
+                />
+              </label>
+              {m.imageUrl && (
+                <button
+                  onClick={() => update(m.id, { imageUrl: undefined })}
+                  title="Убрать картинку"
+                >
+                  Убрать
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   function PropsTab({ modelId }: { modelId: string }) {
     const m = useStore((s) => s.models.find((x) => x.id === modelId));
     const acceptProposal = useStore((s) => s.acceptProposal);
@@ -1113,6 +1235,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
             Проверено экспертом
           </label>
         </div>
+        <ImageField modelId={m.id} />
         {showProposals.length > 0 && (
           <div className="grid2-full">
             <div className="muted small" style={{ marginBottom: 4 }}>

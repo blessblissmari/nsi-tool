@@ -7,6 +7,12 @@ import {
   readUsage,
   type AiUsage,
 } from '../domain/openai';
+import {
+  getUiSettings,
+  setUiSettings,
+  subscribeUiSettings,
+  type UiSettings,
+} from '../domain/uiSettings';
 
 interface Props {
   onClose: () => void;
@@ -16,13 +22,21 @@ export function AiSettings({ onClose }: Props) {
   const [key, setKey] = useState(() => getApiKey() ?? '');
   const [usage, setUsage] = useState<AiUsage>(() => readUsage());
   const [revealed, setRevealed] = useState(false);
+  const [ui, setUi] = useState<UiSettings>(() => getUiSettings());
 
   useEffect(() => {
     const onU = (e: Event) =>
       setUsage((e as CustomEvent<AiUsage>).detail ?? readUsage());
     window.addEventListener('nsi:ai-usage', onU);
-    return () => window.removeEventListener('nsi:ai-usage', onU);
+    const off = subscribeUiSettings(setUi);
+    return () => {
+      window.removeEventListener('nsi:ai-usage', onU);
+      off();
+    };
   }, []);
+
+  const toggleUi = (patch: Partial<UiSettings>) =>
+    setUi(setUiSettings(patch));
 
   return (
     <div
@@ -54,11 +68,46 @@ export function AiSettings({ onClose }: Props) {
             marginBottom: 8,
           }}
         >
-          <h3 style={{ margin: 0 }}>Настройки ИИ</h3>
+          <h3 style={{ margin: 0 }}>Настройки</h3>
           <span style={{ flex: 1 }} />
           <button onClick={onClose}>×</button>
         </div>
+
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div className="muted small" style={{ fontWeight: 600 }}>
+            Интерфейс
+          </div>
+          <label
+            className="row-flex"
+            style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+          >
+            <input
+              type="checkbox"
+              checked={ui.showModelImages}
+              onChange={(e) =>
+                toggleUi({ showModelImages: e.target.checked })
+              }
+            />
+            <span>Показывать картинки моделей</span>
+          </label>
+          <label
+            className="row-flex"
+            style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+          >
+            <input
+              type="checkbox"
+              checked={ui.modelCardFullscreen}
+              onChange={(e) =>
+                toggleUi({ modelCardFullscreen: e.target.checked })
+              }
+            />
+            <span>Открывать карточку модели на весь экран</span>
+          </label>
+
+          <hr />
+          <div className="muted small" style={{ fontWeight: 600 }}>
+            ИИ (OpenAI)
+          </div>
           <label className="muted small">
             OpenAI API ключ (gpt-4o-mini). Хранится в localStorage браузера, на
             сервер не уходит.
