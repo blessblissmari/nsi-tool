@@ -13,6 +13,9 @@ import {
   subscribeUiSettings,
   type UiSettings,
 } from '../domain/uiSettings';
+import { useStore } from '../store';
+import { SEED_NORMALIZATION_RULES } from '../data/seed';
+import type { NormalizationRule } from '../domain/types';
 
 interface Props {
   onClose: () => void;
@@ -23,6 +26,15 @@ export function AiSettings({ onClose }: Props) {
   const [usage, setUsage] = useState<AiUsage>(() => readUsage());
   const [revealed, setRevealed] = useState(false);
   const [ui, setUi] = useState<UiSettings>(() => getUiSettings());
+  const rules = useStore((s) => s.rules);
+  const setRules = useStore((s) => s.setRules);
+  const toggleRule = (kind: 'modelRules' | 'classRules', id: string) => {
+    const list = rules[kind].map((r: NormalizationRule) =>
+      r.id === id ? { ...r, enabled: !r.enabled } : r,
+    );
+    setRules({ ...rules, [kind]: list });
+  };
+  const resetRules = () => setRules(SEED_NORMALIZATION_RULES);
 
   useEffect(() => {
     const onU = (e: Event) =>
@@ -57,7 +69,9 @@ export function AiSettings({ onClose }: Props) {
           background: 'white',
           padding: 16,
           minWidth: 460,
-          maxWidth: 600,
+          maxWidth: 720,
+          maxHeight: '85vh',
+          overflow: 'auto',
           border: '1px solid #999',
         }}
       >
@@ -179,6 +193,73 @@ export function AiSettings({ onClose }: Props) {
             Модель: <b>gpt-4o-mini</b> · $0.15 / 1M вход · $0.60 / 1M выход.
             Все ответы кэшируются по содержимому запроса — повторный клик не
             тратит токены.
+          </div>
+
+          <hr />
+          <div
+            className="row-flex"
+            style={{ alignItems: 'center', gap: 6 }}
+          >
+            <span className="muted small" style={{ fontWeight: 600 }}>
+              Правила нормализации (п.8.2 / п.8.3 ТЗ)
+            </span>
+            <span className="spacer" />
+            <button
+              onClick={resetRules}
+              title="Сбросить к правилам «Простоев.Нет» по умолчанию"
+            >
+              сбросить
+            </button>
+          </div>
+          <div className="muted small">
+            Отключённые правила не применяются в «Нормализовать» и при
+            ручной нормализации кода модели.
+          </div>
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: '1fr 1fr',
+              gap: 12,
+            }}
+          >
+            <div>
+              <div className="muted small" style={{ marginBottom: 4 }}>
+                Модели (п.8.3, {rules.modelRules.length} правил)
+              </div>
+              {rules.modelRules.map((r) => (
+                <label
+                  key={r.id}
+                  className="row-flex small"
+                  style={{ display: 'flex', alignItems: 'flex-start', gap: 4 }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={r.enabled}
+                    onChange={() => toggleRule('modelRules', r.id)}
+                  />
+                  <span>{r.description}</span>
+                </label>
+              ))}
+            </div>
+            <div>
+              <div className="muted small" style={{ marginBottom: 4 }}>
+                Классы/Подклассы (п.8.2, {rules.classRules.length})
+              </div>
+              {rules.classRules.map((r) => (
+                <label
+                  key={r.id}
+                  className="row-flex small"
+                  style={{ display: 'flex', alignItems: 'flex-start', gap: 4 }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={r.enabled}
+                    onChange={() => toggleRule('classRules', r.id)}
+                  />
+                  <span>{r.description}</span>
+                </label>
+              ))}
+            </div>
           </div>
         </div>
       </div>

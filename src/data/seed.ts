@@ -6,10 +6,151 @@ import type {
 } from '../domain/types';
 
 /**
- * Классификатор по умолчанию пустой — пользователь загружает «Классификатор.xlsx»
- * (Класс / Подкласс / Характеристика 1 / Ед.измерения 1 / … / Хар-ка 5 / Ед.изм 5).
+ * Классификатор «Простоев.Нет» по умолчанию — минимальный набор классов
+ * промышленного оборудования с приоритетными характеристиками и ключевыми
+ * словами для автоклассификации (п.6.1 ТЗ: «По умолчанию в инструменте
+ * загружен и используется Классификатор и Правила нормализации Простоев.Нет»).
+ *
+ * Пользователь может перезаписать его, загрузив свой xlsx через
+ * «Загрузить» — autoImport заменит список classes целиком.
  */
-export const SEED_CLASSIFIER: Classifier = { classes: [] };
+export const SEED_CLASSIFIER: Classifier = {
+  classes: [
+    {
+      name: 'Насосы',
+      keywords: ['насос', 'pump'],
+      priorityChars: [
+        { key: 'Подача', unit: 'м3/ч', type: 'number', aliases: ['производительность', 'расход'] },
+        { key: 'Напор', unit: 'м', type: 'number' },
+        { key: 'Мощность', unit: 'кВт', type: 'number' },
+      ],
+      subclasses: [
+        { name: 'Центробежные', keywords: ['центробеж', 'нм', 'к-', 'км-', 'кмс'] },
+        { name: 'Шестерёнчатые', keywords: ['шестер', 'нш', 'gear'] },
+        { name: 'Винтовые', keywords: ['винтов', 'screw'] },
+        { name: 'Поршневые', keywords: ['поршн', 'piston'] },
+        { name: 'Мембранные', keywords: ['мембр', 'диафраг'] },
+      ],
+    },
+    {
+      name: 'Двигатели',
+      keywords: ['двигател', 'мотор', 'motor', 'аир', 'аим'],
+      priorityChars: [
+        { key: 'Мощность', unit: 'кВт', type: 'number' },
+        { key: 'Напряжение', unit: 'В', type: 'number' },
+        { key: 'Частота вращения', unit: 'об/мин', type: 'number', aliases: ['обороты', 'rpm'] },
+      ],
+      subclasses: [
+        { name: 'Асинхронные', keywords: ['асинхрон', 'аир', 'ад', 'аим', '4а'] },
+        { name: 'Постоянного тока', keywords: ['постоянного тока', 'дпт', 'dc'] },
+        { name: 'Синхронные', keywords: ['синхрон', 'sd'] },
+      ],
+    },
+    {
+      name: 'Компрессоры',
+      keywords: ['компрессор', 'compressor'],
+      priorityChars: [
+        { key: 'Производительность', unit: 'м3/мин', type: 'number' },
+        { key: 'Давление', unit: 'МПа', type: 'number' },
+        { key: 'Мощность', unit: 'кВт', type: 'number' },
+      ],
+      subclasses: [
+        { name: 'Поршневые', keywords: ['поршн'] },
+        { name: 'Винтовые', keywords: ['винтов', 'screw'] },
+        { name: 'Центробежные', keywords: ['центробеж'] },
+      ],
+    },
+    {
+      name: 'Редукторы',
+      keywords: ['редуктор', 'reducer'],
+      priorityChars: [
+        { key: 'Передаточное число', type: 'number' },
+        { key: 'Крутящий момент', unit: 'Н*м', type: 'number' },
+      ],
+      subclasses: [
+        { name: 'Цилиндрические', keywords: ['цилиндр', 'ц2', 'ц3'] },
+        { name: 'Червячные', keywords: ['червяч'] },
+        { name: 'Планетарные', keywords: ['планетар'] },
+      ],
+    },
+    {
+      name: 'Вентиляторы',
+      keywords: ['вентилятор', 'fan', 'вц-', 'во-'],
+      priorityChars: [
+        { key: 'Производительность', unit: 'м3/ч', type: 'number' },
+        { key: 'Напор', unit: 'Па', type: 'number' },
+      ],
+      subclasses: [
+        { name: 'Осевые', keywords: ['осев', 'во-'] },
+        { name: 'Радиальные', keywords: ['радиальн', 'вц-', 'центробеж'] },
+        { name: 'Канальные', keywords: ['канальн'] },
+      ],
+    },
+    {
+      name: 'Ёмкости',
+      keywords: ['емкост', 'ёмкост', 'резервуар', 'цистерн', 'бак'],
+      priorityChars: [
+        { key: 'Объём', unit: 'м3', type: 'number' },
+        { key: 'Давление', unit: 'МПа', type: 'number' },
+      ],
+      subclasses: [
+        { name: 'Резервуары', keywords: ['резервуар', 'рвс'] },
+        { name: 'Цистерны', keywords: ['цистерн'] },
+        { name: 'Баки', keywords: ['бак'] },
+      ],
+    },
+    {
+      name: 'Теплообменники',
+      keywords: ['теплообмен', 'heat exchanger'],
+      priorityChars: [
+        { key: 'Поверхность теплообмена', unit: 'м2', type: 'number' },
+        { key: 'Давление', unit: 'МПа', type: 'number' },
+      ],
+      subclasses: [
+        { name: 'Кожухотрубные', keywords: ['кожух', 'трубчат'] },
+        { name: 'Пластинчатые', keywords: ['пластинч'] },
+      ],
+    },
+    {
+      name: 'Запорная арматура',
+      keywords: ['задвижк', 'клапан', 'кран', 'вентил'],
+      priorityChars: [
+        { key: 'DN', unit: 'мм', type: 'number', aliases: ['диаметр', 'ду'] },
+        { key: 'PN', unit: 'МПа', type: 'number', aliases: ['давление'] },
+      ],
+      subclasses: [
+        { name: 'Задвижки', keywords: ['задвижк', '30с', '30ч'] },
+        { name: 'Клапаны', keywords: ['клапан'] },
+        { name: 'Краны', keywords: ['кран ', 'шаров'] },
+      ],
+    },
+    {
+      name: 'Трубопроводы',
+      keywords: ['трубопровод', 'pipeline'],
+      priorityChars: [
+        { key: 'DN', unit: 'мм', type: 'number' },
+        { key: 'PN', unit: 'МПа', type: 'number' },
+      ],
+      subclasses: [
+        { name: 'Магистральные', keywords: ['магистрал'] },
+        { name: 'Технологические', keywords: ['технологич'] },
+      ],
+    },
+    {
+      name: 'Электрические щиты',
+      keywords: ['щит', 'шкаф', 'панель'],
+      priorityChars: [
+        { key: 'Напряжение', unit: 'В', type: 'number' },
+        { key: 'Ток', unit: 'А', type: 'number' },
+      ],
+      subclasses: [
+        { name: 'Силовые', keywords: ['силов'] },
+        { name: 'Управления', keywords: ['управлен'] },
+        { name: 'Распределительные', keywords: ['распред'] },
+      ],
+    },
+  ],
+};
 
 export const SEED_NORMALIZATION_RULES: NormalizationRules = {
   modelRules: [

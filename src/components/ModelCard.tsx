@@ -52,11 +52,56 @@ function newId(p: string) {
   return `${p}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 }
 
+/**
+ * Бейдж расширения файла для документов на ТОР (п.6.1 ТЗ:
+ * «Реализовано визуальное цветовое обозначение типов файлов»).
+ * Цвета подобраны под основные типы документов в ТОиР.
+ */
+function fileExt(name: string): string {
+  if (!name) return '';
+  const cleaned = name.split('?')[0].split('#')[0];
+  const m = /\.([a-zа-я0-9]{1,8})$/i.exec(cleaned.trim());
+  return m ? m[1].toLowerCase() : '';
+}
+function FileExtBadge({ name }: { name: string }) {
+  const ext = fileExt(name);
+  if (!ext) return <span className="ext-badge ext-other">FILE</span>;
+  const known = new Set([
+    'pdf',
+    'doc',
+    'docx',
+    'xls',
+    'xlsx',
+    'csv',
+    'txt',
+    'rtf',
+    'zip',
+    'rar',
+    'png',
+    'jpg',
+    'jpeg',
+    'webp',
+    'svg',
+    'dwg',
+    'dxf',
+  ]);
+  const cls = known.has(ext) ? `ext-${ext}` : 'ext-other';
+  return <span className={`ext-badge ${cls}`}>{ext.toUpperCase()}</span>;
+}
+
 export function ModelCard({ modelId }: { modelId: string }) {
   const model = useStore((s) => s.models.find((x) => x.id === modelId));
   const classifier = useStore((s) => s.classifier);
+  const rules = useStore((s) => s.rules);
   const update = useStore((s) => s.updateModel);
   const remove = useStore((s) => s.deleteModel);
+  const disabledRules = useMemo(
+    () =>
+      new Set(
+        rules.modelRules.filter((r) => !r.enabled).map((r) => r.id),
+      ),
+    [rules],
+  );
   const [tab, setTab] = useState<Tab>('props');
   const [ui, setUi] = useState<UiSettings>(() => getUiSettings());
   useEffect(() => subscribeUiSettings(setUi), []);
@@ -65,8 +110,8 @@ export function ModelCard({ modelId }: { modelId: string }) {
     setUiSettings({ modelCardFullscreen: !fullscreen });
 
   const norm = useMemo(
-    () => (model ? normalizeModelCode(model.rawCode) : null),
-    [model],
+    () => (model ? normalizeModelCode(model.rawCode, disabledRules) : null),
+    [model, disabledRules],
   );
 
   if (!model) return null;
@@ -926,7 +971,9 @@ export function ModelCard({ modelId }: { modelId: string }) {
                 <td className="muted small">
                   {a.periodHours ? humanDuration(a.periodHours) : '—'}
                 </td>
-                <td className="muted small">{labelSource(a.source)}</td>
+                <td className="muted small">
+                  <SourceBadge source={a.source} />
+                </td>
                 <td>
                   <input
                     value={a.note ?? ''}
@@ -1059,7 +1106,10 @@ export function ModelCard({ modelId }: { modelId: string }) {
             <button
               title="Применить правила нормализации (п.8.3 ТЗ)"
               onClick={() => {
-                const r = normalizeModelCode(m.normalizedCode || m.rawCode);
+                const r = normalizeModelCode(
+                  m.normalizedCode || m.rawCode,
+                  disabledRules,
+                );
                 update(m.id, { normalizedCode: r.code });
               }}
             >
@@ -1355,11 +1405,15 @@ export function ModelCard({ modelId }: { modelId: string }) {
                   </select>
                 </td>
                 <td>
-                  <input
-                    className="mono"
-                    value={d.url}
-                    onChange={(e) => updateDoc(d.id, { url: e.target.value })}
-                  />
+                  <div className="row-flex" style={{ gap: 4, alignItems: 'center' }}>
+                    <FileExtBadge name={d.filename || d.url} />
+                    <input
+                      className="mono"
+                      value={d.url}
+                      onChange={(e) => updateDoc(d.id, { url: e.target.value })}
+                      style={{ flex: 1 }}
+                    />
+                  </div>
                 </td>
                 <td>
                   <div className="row-flex" style={{ gap: 4 }}>
@@ -1480,6 +1534,11 @@ export function ModelCard({ modelId }: { modelId: string }) {
 
   function CharsTab({ modelId }: { modelId: string }) {
     const m = useStore((s) => s.models.find((x) => x.id === modelId));
+    const [excerpt, setExcerpt] = useState<{
+      key: string;
+      value: string;
+      docId: string;
+    } | null>(null);
     if (!m) return null;
     const chars = sortCharacteristics(m.characteristics ?? []);
     const missing = missingPriorityChars(chars, cls, sub);
@@ -1670,7 +1729,23 @@ export function ModelCard({ modelId }: { modelId: string }) {
                       (c.valueNum !== undefined ? fmtNum(c.valueNum) : '—')}
                   </td>
                   <td className="muted small">
-                    {c.source}
+                    <SourceBadge source={c.source} />
+                    {c.documentId && (
+                      <button
+                        className="link-btn"
+                        title="Открыть фрагмент документа, на основании которого получено значение (п.7 ТЗ)"
+                        style={{ marginLeft: 4 }}
+                        onClick={() =>
+                          setExcerpt({
+                            key: c.key,
+                            value: c.valueRaw,
+                            docId: c.documentId!,
+                          })
+                        }
+                      >
+                        📎
+                      </button>
+                    )}
                     {c.lockedByExpert ? ' 🔒' : ''}
                   </td>
                   <td>
@@ -1709,6 +1784,14 @@ export function ModelCard({ modelId }: { modelId: string }) {
               </button>
             ))}
           </div>
+        )}
+        {excerpt && (
+          <DocExcerptModal
+            doc={(m.documents ?? []).find((d) => d.id === excerpt.docId)}
+            charKey={excerpt.key}
+            charValue={excerpt.value}
+            onClose={() => setExcerpt(null)}
+          />
         )}
       </div>
     );
@@ -2051,6 +2134,164 @@ function labelSource(s: ActionItem['source']): string {
     default:
       return String(s);
   }
+}
+
+/** Окно с фрагментом документа, на основании которого получено значение
+ * (п.7 ТЗ — «Окно с выводом части документа на основании которого
+ * сгенерированы данные с применением сигнальных символов»). */
+function DocExcerptModal({
+  doc,
+  charKey,
+  charValue,
+  onClose,
+}: {
+  doc?: DocumentRef;
+  charKey: string;
+  charValue: string;
+  onClose: () => void;
+}) {
+  const text = doc?.parsedText ?? '';
+  const lines = text.split(/\r?\n/);
+  const keyLc = charKey.toLowerCase();
+  const valLc = (charValue ?? '').toLowerCase();
+  // Помечаем строки, в которых упомянут ключ или значение
+  // (сигнальные символы — выделение курсивом / жёлтый фон).
+  const matches: Array<{ idx: number; line: string }> = [];
+  for (let i = 0; i < lines.length; i++) {
+    const lc = lines[i].toLowerCase();
+    if ((keyLc && lc.includes(keyLc)) || (valLc && lc.includes(valLc))) {
+      matches.push({ idx: i, line: lines[i] });
+    }
+  }
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(0,0,0,0.3)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 60,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: 'white',
+          padding: 14,
+          minWidth: 520,
+          maxWidth: 760,
+          maxHeight: '80vh',
+          overflow: 'auto',
+          border: '1px solid #999',
+        }}
+      >
+        <div className="row-flex" style={{ alignItems: 'center', gap: 6 }}>
+          <h3 style={{ margin: 0 }}>Фрагмент документа</h3>
+          <span className="spacer" />
+          <button onClick={onClose}>×</button>
+        </div>
+        <div className="muted small" style={{ marginTop: 4 }}>
+          Источник для «<b>{charKey}</b>» = <b>{charValue || '—'}</b>
+          {doc?.url && (
+            <>
+              {' · '}
+              <a href={doc.url} target="_blank" rel="noreferrer">
+                открыть документ
+              </a>
+            </>
+          )}
+          {doc?.filename && <> · {doc.filename}</>}
+        </div>
+        {!doc && (
+          <div className="warn-text" style={{ marginTop: 8 }}>
+            Документ не найден.
+          </div>
+        )}
+        {doc && !text.trim() && (
+          <div className="muted" style={{ marginTop: 8 }}>
+            Распознанный текст для документа отсутствует. Откройте «Документы» →
+            «вставить…» и вставьте текст вручную, либо загрузите файл.
+          </div>
+        )}
+        {doc && text.trim() && (
+          <div style={{ marginTop: 8 }}>
+            {matches.length === 0 ? (
+              <div className="muted small">
+                Прямых упоминаний «{charKey}» / «{charValue}» в тексте не
+                найдено. Полный текст ниже.
+              </div>
+            ) : (
+              <div>
+                <div className="muted small" style={{ marginBottom: 4 }}>
+                  Найденные строки ({matches.length}):
+                </div>
+                <pre
+                  className="mono small"
+                  style={{
+                    background: '#fffbe5',
+                    border: '1px solid #d8c97a',
+                    padding: 8,
+                    whiteSpace: 'pre-wrap',
+                    margin: 0,
+                  }}
+                >
+                  {matches
+                    .map(({ idx, line }) => `стр. ${idx + 1}: ${line}`)
+                    .join('\n')}
+                </pre>
+              </div>
+            )}
+            <details style={{ marginTop: 8 }}>
+              <summary className="muted small">
+                Полный распознанный текст ({text.length} симв.)
+              </summary>
+              <pre
+                className="mono small"
+                style={{
+                  whiteSpace: 'pre-wrap',
+                  background: 'var(--bg-alt)',
+                  padding: 8,
+                  margin: '4px 0 0',
+                }}
+              >
+                {text}
+              </pre>
+            </details>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Бейдж источника информации (п.7 ТЗ — оценка качества данных). */
+function SourceBadge({
+  source,
+  confidence,
+  title,
+}: {
+  source?: string;
+  confidence?: number;
+  title?: string;
+}) {
+  if (!source) return null;
+  const cls = `src-${source}`;
+  const pct =
+    typeof confidence === 'number' && confidence > 0 && confidence <= 1
+      ? ` ${Math.round(confidence * 100)}%`
+      : '';
+  return (
+    <span
+      className={`src-badge ${cls}`}
+      title={title ?? `Источник: ${labelSource(source as ActionItem['source'])}${pct ? `, уверенность${pct}` : ''}`}
+    >
+      {labelSource(source as ActionItem['source'])}
+      {pct}
+    </span>
+  );
 }
 
 function humanDuration(hours: number): string {

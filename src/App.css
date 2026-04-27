@@ -541,3 +541,110 @@ select:focus {
   max-height: 100%;
   object-fit: contain;
 }
+
+/* Цветовое обозначение типов файлов в Документах (п.6.1 ТЗ).
+   Узкий равномерный бейдж — без украшений, для инженерного интерфейса. */
+.ext-badge {
+  display: inline-block;
+  font-family: ui-monospace, monospace;
+  font-size: 10px;
+  line-height: 14px;
+  padding: 0 4px;
+  border-radius: 2px;
+  border: 1px solid transparent;
+  color: #fff;
+  text-align: center;
+  min-width: 36px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.ext-pdf {
+  background: #c0392b;
+}
+.ext-doc,
+.ext-docx,
+.ext-rtf {
+  background: #2c5db1;
+}
+.ext-xls,
+.ext-xlsx,
+.ext-csv {
+  background: #1f7a3a;
+}
+.ext-txt {
+  background: #555;
+}
+.ext-zip,
+.ext-rar {
+  background: #7e5615;
+}
+.ext-png,
+.ext-jpg,
+.ext-jpeg,
+.ext-webp,
+.ext-svg {
+  background: #6f42c1;
+}
+.ext-dwg,
+.ext-dxf {
+  background: #b86b00;
+}
+.ext-other {
+  background: #888;
+}
+
+/* Бейдж источника информации (п.7 ТЗ — оценка качества данных). */
+.src-badge {
+  display: inline-block;
+  font-size: 10px;
+  line-height: 14px;
+  padding: 0 4px;
+  border-radius: 2px;
+  border: 1px solid var(--border);
+  background: var(--bg-alt);
+  color: var(--fg);
+  white-space: nowrap;
+}
+.src-ai {
+  background: #e7f0fb;
+  border-color: #6f9bd1;
+  color: #1a3d6e;
+}
+.src-classifier {
+  background: #e9f7ee;
+  border-color: #5fad7a;
+  color: #1f5b32;
+}
+.src-document {
+  background: #fff7e0;
+  border-color: #c7a04e;
+  color: #6b4d12;
+}
+.src-web {
+  background: #f5e7fa;
+  border-color: #a060c0;
+  color: #533378;
+}
+.src-analog {
+  background: #fdecec;
+  border-color: #c75858;
+  color: #6e2222;
+}
+.src-manual {
+  background: #f0f0f0;
+  border-color: #999;
+  color: #444;
+}
+
+/* Кнопка-ссылка без рамки (для иконок 📎 и т.п. в таблицах). */
+.link-btn {
+  background: transparent;
+  border: none;
+  padding: 0 2px;
+  cursor: pointer;
+  font: inherit;
+  color: var(--accent, #1a3d6e);
+}
+.link-btn:hover {
+  text-decoration: underline;
+}

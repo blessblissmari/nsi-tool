@@ -57,11 +57,16 @@ function classOf(ch: string): 'L' | 'D' | 'O' {
  * Главная функция нормализации.
  * Возвращает нормализованный код и список применённых правил.
  */
-export function normalizeModelCode(input: string): {
+export function normalizeModelCode(
+  input: string,
+  /** id отключённых правил из `rules.modelRules` (по умолчанию все включены). */
+  disabled?: ReadonlySet<string>,
+): {
   code: string;
   applied: string[];
   warnings: string[];
 } {
+  const off = (id: string) => disabled?.has(id) ?? false;
   const applied: string[] = [];
   const warnings: string[] = [];
   let s = String(input ?? '');
@@ -69,58 +74,70 @@ export function normalizeModelCode(input: string): {
 
   // (2) непечатные символы → удалить; trim. Пробелы внутри — оставляем
   //     как разделители (они пройдут логику п.3-5).
-  const before2 = s;
-  // eslint-disable-next-line no-control-regex
-  s = s.replace(/[\u0000-\u001F\u007F]/g, '');
-  s = s.trim();
-  if (s !== before2) applied.push('p2: убраны непечатные символы / trim');
+  if (!off('p2')) {
+    const before2 = s;
+    // eslint-disable-next-line no-control-regex
+    s = s.replace(/[\u0000-\u001F\u007F]/g, '');
+    s = s.trim();
+    if (s !== before2) applied.push('p2: убраны непечатные символы / trim');
+  }
 
   // (1) Верхний регистр
-  const before1 = s;
-  s = s.toUpperCase();
-  if (s !== before1) applied.push('p1: верхний регистр');
+  if (!off('p1')) {
+    const before1 = s;
+    s = s.toUpperCase();
+    if (s !== before1) applied.push('p1: верхний регистр');
+  }
 
   // (9) Запрещены ё/Ё → заменяем на е/Е
-  if (/[Её]/.test(s)) {
+  if (!off('p9') && /[Её]/.test(s)) {
     s = s.replace(/Ё/g, 'Е').replace(/ё/g, 'е');
     applied.push('p9: ё→е');
   }
 
   // (10) Латиница-омоглифы → кириллица, только если в коде уже есть кириллица.
-  const hasCyr = CYR.test(s);
-  if (hasCyr) {
-    let any = false;
-    s = s.replace(/[ABCEHKMOPTX]/g, (ch) => {
-      any = true;
-      return LATIN_LOOKALIKES[ch] ?? ch;
-    });
-    if (any) applied.push('p10: латиница-омоглифы → кириллица');
+  if (!off('p10')) {
+    const hasCyr = CYR.test(s);
+    if (hasCyr) {
+      let any = false;
+      s = s.replace(/[ABCEHKMOPTX]/g, (ch) => {
+        any = true;
+        return LATIN_LOOKALIKES[ch] ?? ch;
+      });
+      if (any) applied.push('p10: латиница-омоглифы → кириллица');
+    }
   }
 
   // (7) Извлекаем «№<цифры>» → перенесём в конец как «(№<цифры>)»
   let suffix = '';
-  const noMatches: string[] = [];
-  s = s.replace(/№\s*(\d+)/g, (_m, g1) => {
-    noMatches.push(`(№${g1})`);
-    return ' ';
-  });
-  if (noMatches.length) {
-    suffix = noMatches.join('');
-    applied.push('p7: №<цифры> вынесен в конец');
+  if (!off('p7')) {
+    const noMatches: string[] = [];
+    s = s.replace(/№\s*(\d+)/g, (_m, g1) => {
+      noMatches.push(`(№${g1})`);
+      return ' ';
+    });
+    if (noMatches.length) {
+      suffix = noMatches.join('');
+      applied.push('p7: №<цифры> вынесен в конец');
+    }
   }
 
   // (8) Латинская «X» как разделитель → «-».
   // (после toUpperCase и (10) она могла стать кириллической «Х»).
-  const before8 = s;
-  s = s.replace(/(\d)[XХ](\d)/g, '$1-$2');
-  s = s.replace(/(\d)[XХ]([A-ZА-Я])/g, '$1-$2');
-  s = s.replace(/([A-ZА-Я])[XХ](\d)/g, '$1-$2');
-  if (s !== before8) applied.push('p8: «x» как разделитель → «-»');
+  if (!off('p8')) {
+    const before8 = s;
+    s = s.replace(/(\d)[XХ](\d)/g, '$1-$2');
+    s = s.replace(/(\d)[XХ]([A-ZА-Я])/g, '$1-$2');
+    s = s.replace(/([A-ZА-Я])[XХ](\d)/g, '$1-$2');
+    if (s !== before8) applied.push('p8: «x» как разделитель → «-»');
+  }
 
   // (6) Запятые между цифрами → точка
-  const before6 = s;
-  s = s.replace(/(\d),(\d)/g, '$1.$2');
-  if (s !== before6) applied.push('p6: запятая между цифрами → точка');
+  if (!off('p6')) {
+    const before6 = s;
+    s = s.replace(/(\d),(\d)/g, '$1.$2');
+    if (s !== before6) applied.push('p6: запятая между цифрами → точка');
+  }
 
   // (3)/(4)/(5): проходим по строке, обрабатывая разделители между классами символов.
   let out = '';
@@ -197,9 +214,11 @@ export function normalizeModelCode(input: string): {
   s += suffix;
 
   // (13) Финальная фильтрация: оставляем буквы, цифры и допустимые спецсимволы.
-  const before13 = s;
-  s = s.replace(/[^A-ZА-ЯΑ-Ω\u2160-\u216F0-9.\-№()]/g, '');
-  if (s !== before13) applied.push('p13: удалены недопустимые символы');
+  if (!off('p13')) {
+    const before13 = s;
+    s = s.replace(/[^A-ZА-ЯΑ-Ω\u2160-\u216F0-9.\-№()]/g, '');
+    if (s !== before13) applied.push('p13: удалены недопустимые символы');
+  }
 
   // Предупреждения
   if (LAT.test(s) && CYR.test(s)) {

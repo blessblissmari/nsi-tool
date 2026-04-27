@@ -221,8 +221,11 @@ export const useStore = create<Store>()(
 
   normalizeAll() {
     let done = 0;
+    const disabled = new Set(
+      get().rules.modelRules.filter((r) => !r.enabled).map((r) => r.id),
+    );
     const next = get().models.map((m) => {
-      const r = normalizeModelCode(m.rawCode);
+      const r = normalizeModelCode(m.rawCode, disabled);
       if (r.code && r.code !== m.normalizedCode) done++;
       return { ...m, normalizedCode: r.code };
     });
@@ -529,7 +532,18 @@ export const useStore = create<Store>()(
     }),
     {
       name: 'nsi_store_v1',
-      version: 1,
+      version: 2,
+      // v1→v2: подсыпаем дефолтный классификатор «Простоев.Нет», если в
+      // сохранённом стейте классификатор пуст. Пользовательские классификаторы
+      // не трогаем.
+      migrate: (persisted: unknown) => {
+        const ps = (persisted ?? {}) as Partial<Store>;
+        const cls = ps.classifier;
+        if (!cls || !cls.classes || cls.classes.length === 0) {
+          return { ...ps, classifier: SEED_CLASSIFIER } as Partial<Store>;
+        }
+        return ps as Partial<Store>;
+      },
       storage: createJSONStorage(() => localStorage, {
         // Сериализуем Set как массив, чтобы JSON корректно его сохранял.
         replacer: (_k, v) => (v instanceof Set ? { __set: Array.from(v) } : v),
