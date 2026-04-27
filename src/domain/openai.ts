@@ -18,10 +18,28 @@ import type {
   EquipmentModel,
 } from './types';
 import type { AiProvider } from './ai';
+import {
+  BOM_BY_CLASS,
+  bomFewShot,
+  techCardFewShot,
+} from '../data/realBomAndTechCards';
 
-const MODEL = 'gpt-4o-mini';
-const PRICE_PROMPT_PER_M = 0.15; // USD / 1M токенов
-const PRICE_COMPLETION_PER_M = 0.6;
+/**
+ * Основная модель — дешёвая. Используется для классификации, подбора
+ * ВВ, извлечения характеристик. Выдаёт нормальный результат на типовых
+ * задачах, но на «творческих» (техкарты, BOM) склонна придумывать.
+ */
+const MODEL_FAST = 'gpt-4o-mini';
+/**
+ * Большая модель — для задач, где важна достоверность (техкарты по
+ * шаблону, типовой BOM/APL из интернета). В ≈16× дороже по выходу,
+ * но содержательно пишет так, как в реальных паспортах.
+ */
+const MODEL_QUALITY = 'gpt-4o';
+const PRICE_FAST_PROMPT = 0.15; // USD / 1M
+const PRICE_FAST_COMPLETION = 0.6;
+const PRICE_QUALITY_PROMPT = 2.5;
+const PRICE_QUALITY_COMPLETION = 10.0;
 
 const KEY_STORAGE = 'nsi_openai_api_key';
 const USAGE_STORAGE = 'nsi_openai_usage';
@@ -104,6 +122,8 @@ async function callOpenAI<T>(
     bypassCache?: boolean;
     /** Если задано — не кэшировать, когда функция вернула «пусто». */
     isEmpty?: (value: unknown) => boolean;
+    /** Какую модель использовать. По умолчанию gpt-4o-mini. */
+    model?: 'fast' | 'quality';
   },
 ): Promise<T | undefined> {
   const cache = readCache();
@@ -113,6 +133,8 @@ async function callOpenAI<T>(
   const key = getApiKey();
   if (!key) throw new Error('Не задан OpenAI API ключ. Settings → Ключ ИИ.');
 
+  const useQuality = body.model === 'quality';
+  const modelName = useQuality ? MODEL_QUALITY : MODEL_FAST;
   const res = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -120,7 +142,7 @@ async function callOpenAI<T>(
       Authorization: `Bearer ${key}`,
     },
     body: JSON.stringify({
-      model: MODEL,
+      model: modelName,
       response_format: { type: 'json_object' },
       messages: [
         { role: 'system', content: body.system },
@@ -143,9 +165,12 @@ async function callOpenAI<T>(
   u.requests += 1;
   u.promptTokens += usage.prompt_tokens || 0;
   u.completionTokens += usage.completion_tokens || 0;
-  u.costUsd =
-    (u.promptTokens * PRICE_PROMPT_PER_M) / 1_000_000 +
-    (u.completionTokens * PRICE_COMPLETION_PER_M) / 1_000_000;
+  const pIn = useQuality ? PRICE_QUALITY_PROMPT : PRICE_FAST_PROMPT;
+  const pOut = useQuality ? PRICE_QUALITY_COMPLETION : PRICE_FAST_COMPLETION;
+  u.costUsd +=
+    ((usage.prompt_tokens || 0) * pIn +
+      (usage.completion_tokens || 0) * pOut) /
+    1_000_000;
   writeUsage(u);
 
   const content = json.choices?.[0]?.message?.content;
@@ -208,6 +233,10 @@ ${docSnippet ? `Фрагмент документа:\n${docSnippet}` : ''}`;
       system,
       user,
       maxTokens: 300,
+      isEmpty: (v) => {
+        const items = (v as Out | undefined)?.items;
+        return !items || items.length === 0;
+      },
     });
     if (!result?.items) return [];
     const validClasses = new Set(input.classes.map((c) => c.name));
@@ -244,6 +273,10 @@ ${text}`;
       system,
       user,
       maxTokens: 600,
+      isEmpty: (v) => {
+        const items = (v as Out | undefined)?.items;
+        return !items || items.length === 0;
+      },
     });
     if (!result?.items) return [];
     const validKeys = new Set(input.keys.map((k) => k.key));
@@ -259,12 +292,21 @@ ${text}`;
   > {
     const cacheKey = 'actions:' + fingerprint(input.model);
     const system =
-      'Ты эксперт ТОиР. Предложи типовой набор видов воздействия (ВВ) для модели ' +
-      'оборудования с указанной периодичностью в часах наработки. ' +
-      'Используй стандартные обозначения: «ТО-1», «ТО-2», «ТО-3», «ТО-4», «ТР-1», «ТР-2», «КР-1», «КР-2», «КР-3». ' +
-      'Возвращай json {"items":[{"name":"ТО-1","kind":"TO|repair|inspection|diagnostic","periodHours":<число>,"reason":"..."}]}. ' +
-      '5–9 строк. periodHours — целое число часов. ' +
-      'Без пояснений снаружи json.';
+      'Ты эксперт ТОиР. Предложи типовой набор видов воздействия (ВВ) ' +
+      'для модели оборудования с указанной периодичностью в часах ' +
+      'наработки. Используй стандартные обозначения: «ЕО» (ежесменное), ' +
+      '«ТО-1», «ТО-2», «ТО-3», «ТО-4», «ТР-1», «ТР-2», «КР-1», «КР-2», ' +
+      '«КР-3». ' +
+      'ПРАВИЛА: ' +
+      '(1) Периодичности должны быть убывающе-иерархичны: ' +
+      'ЕО ≈ 8-24 ч, ТО-1 ≈ 120-500 ч, ТО-2 ≈ 2000-3000 ч, ' +
+      'ТО-3 ≈ 4000-6000 ч, ТР-1 ≈ 6000-8000 ч, ТР-2 ≈ 12000-18000 ч, ' +
+      'КР-1 ≈ 20000-30000 ч, КР-2 ≈ 40000-50000 ч. ' +
+      '(2) kind: "TO" для ЕО/ТО-*, "repair" для ТР-*/КР-*, ' +
+      '"inspection" для осмотров, "diagnostic" для диагностик. ' +
+      '(3) reason — краткое обоснование (1 строка): что входит в ВВ. ' +
+      'Возвращай json {"items":[{"name":"ТО-1","kind":"TO","periodHours":250,"reason":"..."}]}. ' +
+      '5–9 строк, periodHours — целое число часов.';
     const user = `Класс: ${input.model.className ?? '—'}
 Подкласс: ${input.model.subclassName ?? '—'}
 Модель: ${input.model.normalizedCode ?? '—'}`;
@@ -279,7 +321,11 @@ ${text}`;
     const result = await callOpenAI<Out>(cacheKey, {
       system,
       user,
-      maxTokens: 500,
+      maxTokens: 700,
+      isEmpty: (v) => {
+        const items = (v as Out | undefined)?.items;
+        return !items || items.length === 0;
+      },
     });
     if (!result?.items) return [];
     return result.items
@@ -311,14 +357,23 @@ ${text}`;
     const system =
       'Ты помощник по паспортным характеристикам промышленного оборудования. ' +
       'На основании общедоступных каталогов и руководств производителей ' +
-      'верни типовые/паспортные значения запрошенных характеристик для указанной модели. ' +
-      'Если по конкретной модели данных нет — пропусти ключ (не угадывай). ' +
-      'Возвращай ТОЛЬКО json вида ' +
-      '{"items":[{"key":"...","valueRaw":"...","unit":"...","confidence":0.0-1.0,"reason":"кратко источник/обоснование"}]}. ' +
-      'valueRaw — численное/строковое значение (без формул); ' +
-      'unit — единица в той форме, что попросили (или ближайшая). ' +
-      'confidence: 0.9 если параметр стандартный для серии и однозначен, ' +
-      '0.6–0.8 если есть разброс по модификациям, 0.3–0.5 если значение оценочное.';
+      'верни типовые/паспортные значения запрошенных характеристик для ' +
+      'указанной модели. ' +
+      'СТРОГИЕ ПРАВИЛА: ' +
+      '(1) Если по конкретной модели данных нет — ПРОПУСТИ ключ, не ' +
+      'угадывай. Лучше вернуть меньше полей, чем выдумать. ' +
+      '(2) Если модель есть в общедоступных каталогах производителя — ' +
+      'значение confidence >= 0.85. Если ты опираешься на типичное для ' +
+      'подкласса значение (модели точно не знаешь) — confidence не выше ' +
+      '0.6. Не завышай confidence. ' +
+      '(3) valueRaw — только число или короткая строка без формул и ' +
+      'диапазонов. Например "7.5", не "от 5 до 10". Для диапазона ' +
+      'бери среднее или наиболее типовое. ' +
+      '(4) unit — ровно в той форме, что попросили. Если у тебя другое ' +
+      'значение в других единицах — пересчитай (кВт↔л.с., МПа↔бар). ' +
+      '(5) В reason — явно указывай источник: «паспорт модели X», ' +
+      '«каталог производителя Y», «типовое для подкласса». ' +
+      'Возвращай ТОЛЬКО json {"items":[{"key":"...","valueRaw":"...","unit":"...","confidence":0.0-1.0,"reason":"..."}]}.';
     const user = `Модель: ${code}
 Класс: ${input.model.className ?? '—'}
 Подкласс: ${input.model.subclassName ?? '—'}
@@ -335,7 +390,11 @@ ${text}`;
     const result = await callOpenAI<Out>(cacheKey, {
       system,
       user,
-      maxTokens: 600,
+      maxTokens: 800,
+      isEmpty: (v) => {
+        const items = (v as Out | undefined)?.items;
+        return !items || items.length === 0;
+      },
     });
     if (!result?.items) return [];
     const validKeys = new Set(input.keys.map((k) => k.key));
@@ -357,6 +416,24 @@ ${text}`;
     mode: 'bom' | 'apl';
   }) {
     const code = input.model.normalizedCode || input.model.rawCode || '';
+    // 1) Если для класса/подкласса есть реальный BOM из паспорта — отдаём
+    //    его без обращения к ИИ. Источник ровно тот же, что в xlsx.
+    const realKey = `${input.model.className ?? ''}/${input.model.subclassName ?? ''}`;
+    const real = BOM_BY_CLASS[realKey];
+    if (real) {
+      return real.items.slice(0, 40).map((x) => ({
+        actionId: undefined,
+        actionName: undefined,
+        tmcName: x.designation ? `${x.name} (${x.designation})` : x.name,
+        // В BOM из паспорта «материал/запчасть» не разделено — всё идёт
+        // как запчасть; для APL-режима фильтр ниже не нужен (это spare).
+        tmcKind: 'spare' as const,
+        tmcUnit: x.unit ?? undefined,
+        tmcQty: typeof x.qty === 'number' ? x.qty : undefined,
+        confidence: 1,
+        reason: x.source ?? 'Из паспорта модели',
+      }));
+    }
     const cacheKey =
       'enrichBom:' +
       fingerprint(
@@ -374,24 +451,34 @@ ${text}`;
       'Ты инженер-эксперт по ТОиР промышленного оборудования и типовым ' +
       'перечням ТМЦ. На основании общедоступных каталогов запчастей и ' +
       `руководств по эксплуатации ты формируешь ${modeText} ` +
-      'Для класса/подкласса всегда есть типовой перечень — даже если точная ' +
-      'модификация неизвестна, перечисли стандартные позиции класса с ' +
-      'confidence 0.5-0.7. Минимум 8 позиций для BOM, 5 для APL. ' +
-      'Привязывай позиции к ВВ из переданного списка по id (actionId). ' +
+      'СТРОГИЕ ПРАВИЛА: ' +
+      '(1) Не придумывай экзотических деталей — перечисляй только ' +
+      'компоненты, которые гарантированно входят в конструкцию ' +
+      'оборудования данного подкласса (как в паспорте / спецификации). ' +
+      '(2) Если в наименовании можно указать обозначение (стандартное ' +
+      'обозначение подшипника «6204», класс болта «М12×50», марку ' +
+      'уплотнения) — указывай, но не выдумывай артикулы производителя. ' +
+      '(3) Единицы измерения — только «шт», «кг», «л», «м», «компл». ' +
+      '(4) Количество — целое или с одним знаком после запятой. ' +
+      '(5) Если у тебя нет уверенности в позиции — не включай её. ' +
+      'Минимум 8 позиций для BOM, 5 для APL — но все должны быть ' +
+      'реалистичными. ' +
+      'Привязывай позиции к ВВ по actionId из переданного списка. ' +
       'Возвращай ТОЛЬКО json вида ' +
-      '{"items":[{"actionId":"id-из-списка-или-пусто","tmcName":"Подшипник 6204","tmcKind":"material|spare","tmcUnit":"шт|кг|л|м","tmcQty":1,"confidence":0.7,"reason":"кратко"}]}. ' +
+      '{"items":[{"actionId":"id","tmcName":"Подшипник 6204 (ГОСТ 8338)","tmcKind":"material|spare","tmcUnit":"шт","tmcQty":2,"confidence":0.8,"reason":"стандартная опора вала"}]}. ' +
       (input.mode === 'apl'
-        ? 'tmcKind должен быть только "spare" (без материалов). '
+        ? 'tmcKind должен быть только "spare". '
         : '') +
-      'confidence: 0.9 если позиция стандартная для класса, 0.6-0.8 если ' +
-      'зависит от модификации, 0.4-0.5 — общая оценка. Никогда не возвращай ' +
-      'пустой items: всегда есть типовые расходники/запчасти.';
+      'confidence: 0.9+ если позиция точно есть в любой модификации ' +
+      'подкласса, 0.6-0.8 если зависит от исполнения, 0.3-0.5 если ' +
+      'догадка. Никогда не возвращай пустой items.';
+    const sample = bomFewShot(input.model.className, input.model.subclassName, 10);
     const user = `Модель: ${code}
 Класс: ${input.model.className ?? '—'}
 Подкласс: ${input.model.subclassName ?? '—'}
 Список ВВ (JSON): ${JSON.stringify(input.actions)}
 Режим: ${input.mode.toUpperCase()}
-
+${sample ? '\n' + sample + '\n\nИспользуй этот пример как образец стиля и детализации.\n' : ''}
 Сформируй типовой перечень ТМЦ, опираясь на класс «${input.model.className ?? '—'}» / подкласс «${input.model.subclassName ?? '—'}». Если модель точно неизвестна — всё равно перечисли стандартные для подкласса позиции.`;
     type Out = {
       items?: Array<{
@@ -408,6 +495,7 @@ ${text}`;
       system,
       user,
       maxTokens: 2500,
+      model: 'quality',
       isEmpty: (v) => {
         const items = (v as Out | undefined)?.items;
         return !items || items.length === 0;
@@ -456,37 +544,41 @@ ${text}`;
       .join(',');
     const system =
       'Ты инженер-эксперт по ТОиР промышленного оборудования. Формируешь ' +
-      'техкарту по шаблону «Простоев.Нет» (Элемент → Подэлемент → ' +
-      'Наименование операции → Вид ТОиР → Норма времени → Количество ' +
-      'исполнителей → Профессия/Квалификация → ТМЦ). Каждое ВВ из ' +
-      'переданного списка должно быть покрыто 2–6 строками (разные ' +
-      'компоненты / операции). Используй наименования операций и профессий ' +
-      'ИЗ предоставленных справочников, если они там есть. Не выдумывай ' +
-      'экзотику — выбирай стандартные операции (Демонтаж, Монтаж, ' +
-      'Проверка, Смазка, Замена, Диагностика, Регулировка). Возвращай ' +
-      'ТОЛЬКО json вида ' +
-      '{"rows":[{' +
-      '"actionId":"id-из-списка-ВВ",' +
-      '"component":"Ходовая часть",' +
-      '"subcomponent":"Колесо",' +
-      '"operation":"Демонтаж",' +
-      '"workDescription":"Снять компонент с креплений",' +
-      '"laborHours":4,' +
-      '"workers":2,' +
-      '"specialty":"Слесарь по ремонту оборудования",' +
-      '"qualification":"4 разряд",' +
-      '"totalLaborHours":8,' +
-      '"tmcName":"",' +
-      '"tmcKind":"material|spare",' +
-      '"tmcUnit":"шт|кг|л",' +
-      '"tmcQty":1,' +
-      '"tools":"Набор ключей гаечных, 1 компл",' +
-      '"ppe":"Каска, очки, перчатки",' +
-      '"safety":"Отключить питание, вывесить табличку",' +
-      '"confidence":0.7' +
-      '}]}. ' +
-      'Если ТМЦ для строки не требуется — оставь tmcName пустым. ' +
-      'totalLaborHours = laborHours × workers. Минимум 10 строк.';
+      'техкарту по шаблону «Простоев.Нет». Каждая строка = одна операция ' +
+      'для одного подэлемента конкретного ВВ. ' +
+      'СТРОГИЕ ПРАВИЛА: ' +
+      '(1) Элемент (component) и Подэлемент (subcomponent) должны быть ' +
+      'реальными узлами для данного класса/подкласса (как в паспорте). ' +
+      'Не выдумывай узлы, которых у оборудования этого типа не бывает. ' +
+      '(2) Операция — из справочника (Демонтаж, Монтаж, Осмотр, ' +
+      'Смазка, Замена, Регулировка, Диагностика, Чистка, Проверка). ' +
+      '(3) workDescription — 1-2 короткие фразы без воды, как в паспорте. ' +
+      '(4) laborHours — реалистично: осмотр 0.5-2 ч, демонтаж 1-8 ч, ' +
+      'замена подшипника 4-16 ч, регулировка 0.5-4 ч, капремонт 40-200 ч. ' +
+      '(5) workers — 1 для простых, 2 для подъёма, 3+ для крупногабаритных. ' +
+      '(6) totalLaborHours = laborHours × workers. ' +
+      '(7) specialty + qualification из справочника ("Слесарь по ремонту ' +
+      'оборудования, 4 разряд", "Электромонтёр, 5 разряд", ' +
+      '"Машинист крана, 5 разряд"). ' +
+      '(8) ТМЦ (tmcName) только если реально расходуется в операции: ' +
+      'смазка/масло (л, кг), прокладки (шт), подшипники при замене (шт). ' +
+      'Инструменты в ТМЦ НЕ включаются — они идут в tools. ' +
+      '(9) tools — через точку с запятой: "Набор ключей, 1 компл; ' +
+      'Динамометрический ключ, 1 шт". ' +
+      '(10) ppe — конкретно: "Каска, 1 шт; Очки защитные, 1 шт; ' +
+      'Перчатки, 1 пара". ' +
+      '(11) safety — 2-3 пункта через точку с запятой, конкретно по ' +
+      'операции (отключить питание, вывесить табличку, установить ' +
+      'ограждение). ' +
+      '(12) Каждое ВВ покрыто 2–5 строками разных операций. ' +
+      '(13) Если у тебя нет уверенности в параметре — не включай строку. ' +
+      'Минимум 10 реалистичных строк. ' +
+      'Возвращай ТОЛЬКО json: {"rows":[ {...} ]} c полями: actionId, ' +
+      'component, subcomponent, operation, workDescription, laborHours, ' +
+      'workers, specialty, qualification, totalLaborHours, tmcName, ' +
+      'tmcKind (material|spare), tmcUnit, tmcQty, tools, ppe, safety, ' +
+      'confidence.';
+    const fewShot = techCardFewShot(3);
     const user = `Модель: ${code}
 Класс: ${input.model.className ?? '—'}
 Подкласс: ${input.model.subclassName ?? '—'}
@@ -494,7 +586,7 @@ ${text}`;
 Справочник операций (выбирай из них): [${opList}]
 Справочник специальностей: [${specList}]
 
-Сформируй типовую техкарту по шаблону, покрывая все ВВ.`;
+${fewShot ? 'Эталон оформления (реальные строки из шаблона Простоев.Нет):\n\n' + fewShot + '\n\n' : ''}Сформируй типовую техкарту по шаблону, покрывая все ВВ. Пиши в том же стиле и с той же детализацией, что в эталоне.`;
     type Row = {
       actionId?: string;
       component?: string;
@@ -520,6 +612,7 @@ ${text}`;
       system,
       user,
       maxTokens: 4000,
+      model: 'quality',
       isEmpty: (v) => {
         const rows = (v as Out | undefined)?.rows;
         return !rows || rows.length === 0;

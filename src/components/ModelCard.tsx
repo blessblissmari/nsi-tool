@@ -383,8 +383,21 @@ export function ModelCard({ modelId }: { modelId: string }) {
                 const specOptions =
                   r.specialty &&
                   specs.find((s) => s.name === r.specialty)?.qualifications;
+                // Собираем доп.поля в title, чтобы их было видно по hover
+                // и они не съедали ширину таблицы (п.6.5 ТЗ).
+                const tipParts: string[] = [];
+                if (r.subcomponent) tipParts.push(`Подэлемент: ${r.subcomponent}`);
+                if (r.workDescription) tipParts.push(`Содержание: ${r.workDescription}`);
+                if (typeof r.workers === 'number')
+                  tipParts.push(`Исполнителей: ${r.workers}`);
+                if (typeof r.totalLaborHours === 'number')
+                  tipParts.push(`Трудоёмкость: ${r.totalLaborHours} чел/ч`);
+                if (r.tools) tipParts.push(`Инструмент: ${r.tools}`);
+                if (r.ppe) tipParts.push(`СИЗ: ${r.ppe}`);
+                if (r.safety) tipParts.push(`Безопасность: ${r.safety}`);
+                const rowTitle = tipParts.join('\n');
                 return (
-                  <tr key={r.id}>
+                  <tr key={r.id} title={rowTitle || undefined}>
                     <td>
                       <input
                         value={r.component ?? ''}
