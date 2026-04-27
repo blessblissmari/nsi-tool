@@ -1,9 +1,12 @@
 import type {
+  ActionItem,
+  Characteristic,
   Classifier,
   EquipmentModel,
   HierarchyNode,
   NodeType,
   NormalizationRules,
+  ReferenceData,
 } from '../domain/types';
 import { normalizeModelCode } from '../domain/normalize';
 import {
@@ -11,6 +14,23 @@ import {
   SEVERAL_HIERARCHY_ROWS,
   SEVERAL_CLASSIFICATION,
 } from './prostoev';
+import {
+  PROSTOEV_ACTIONS_BY_MODEL,
+  PROSTOEV_CHARS_BY_MODEL,
+  PROSTOEV_REFERENCES,
+} from './prostoevRefs';
+
+/** Справочники «Простоев.Нет» по умолчанию (п.6.4–6.5 ТЗ). */
+export const SEED_REFERENCES: ReferenceData = PROSTOEV_REFERENCES;
+
+function mapVvKind(name: string): ActionItem['kind'] {
+  const s = name.toUpperCase();
+  if (s.startsWith('ТО')) return 'TO';
+  if (s.startsWith('ТР') || s.startsWith('КР')) return 'repair';
+  if (s.includes('ДИАГН')) return 'diagnostic';
+  if (s.includes('ОСМОТР') || s.includes('ПОВЕР')) return 'inspection';
+  return 'other';
+}
 
 /**
  * Классификатор «Простоев.Нет» по умолчанию — полный справочник из
@@ -260,6 +280,36 @@ export function buildSeedHierarchy(): {
       subclassName: c.subclass || undefined,
     });
   }
+  // Истор. ВВ на каждую модель из «Виды воздействия на ТОР ист.xlsx».
+  const actionsByCode = new Map<string, ActionItem[]>();
+  for (const row of PROSTOEV_ACTIONS_BY_MODEL) {
+    const list: ActionItem[] = row.actions.map((a, i) => ({
+      id: `${row.model}-vv-${i + 1}`,
+      name: a.name,
+      kind: mapVvKind(a.name),
+      periodHours: a.periodHours ?? undefined,
+      source: 'document' as const,
+      note: 'Из истории эксплуатации',
+    }));
+    actionsByCode.set(row.model, list);
+  }
+  // Приоритетные характеристики на каждую модель из «Результирующий файл
+  // Модели с характ. ист. по классификатору.xlsx».
+  const charsByCode = new Map<string, Characteristic[]>();
+  for (const row of PROSTOEV_CHARS_BY_MODEL) {
+    const list: Characteristic[] = row.chars.map((c, i) => ({
+      id: `${row.model}-ch-${i + 1}`,
+      key: c.key,
+      valueRaw: String(c.value),
+      valueNum: typeof c.value === 'number' ? c.value : undefined,
+      unit: c.unit ?? undefined,
+      targetUnit: c.unit ?? undefined,
+      isPriority: true,
+      priorityOrder: c.order,
+      source: 'document' as const,
+    }));
+    charsByCode.set(row.model, list);
+  }
 
   const root: HierarchyNode = {
     id: seedId('root'),
@@ -303,6 +353,8 @@ export function buildSeedHierarchy(): {
     if (row.model) {
       const norm = normalizeModelCode(row.model);
       const cls = classByCode.get(norm.code);
+      const acts = actionsByCode.get(norm.code);
+      const chars = charsByCode.get(norm.code);
       const m: EquipmentModel = {
         id: seedId('m'),
         nodeId: parent.id,
@@ -312,6 +364,8 @@ export function buildSeedHierarchy(): {
         subclassName: cls?.subclassName,
         classificationSource: cls ? 'classifier' : undefined,
         classificationConfidence: cls ? 1 : undefined,
+        actions: acts ? acts.map((a) => ({ ...a })) : undefined,
+        characteristics: chars ? chars.map((c) => ({ ...c })) : undefined,
       };
       parent.modelIds = (parent.modelIds ?? []).concat(m.id);
       models.push(m);

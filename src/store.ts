@@ -18,6 +18,7 @@ import { parseValue } from './domain/units';
 import {
   SEED_CLASSIFIER,
   SEED_NORMALIZATION_RULES,
+  SEED_REFERENCES,
   buildSeedHierarchy,
 } from './data/seed';
 import { PROSTOEV_CLASSIFIER } from './data/prostoev';
@@ -118,7 +119,7 @@ export const useStore = create<Store>()(
   models: seed.models,
   classifier: SEED_CLASSIFIER,
   rules: SEED_NORMALIZATION_RULES,
-  references: { actions: [], operations: [], specialties: [], units: [] },
+  references: SEED_REFERENCES,
   selectedNodeId: seed.hierarchy.id,
   selectedModelId: undefined,
   expandedIds: seedInitialExpanded(seed.hierarchy),
@@ -145,6 +146,7 @@ export const useStore = create<Store>()(
       models: s.models,
       classifier: PROSTOEV_CLASSIFIER,
       rules: SEED_NORMALIZATION_RULES,
+      references: SEED_REFERENCES,
       selectedNodeId: s.hierarchy.id,
       selectedModelId: undefined,
       expandedIds: seedInitialExpanded(s.hierarchy),
@@ -575,7 +577,7 @@ export const useStore = create<Store>()(
     }),
     {
       name: 'nsi_store_v1',
-      version: 3,
+      version: 4,
       // v1→v2: подсыпаем дефолтный классификатор «Простоев.Нет», если в
       // сохранённом стейте классификатор пуст.
       // v2→v3: если иерархия пустая (был пустой seed) — подсыпаем демо-иерархию
@@ -603,6 +605,19 @@ export const useStore = create<Store>()(
             models: seeded.models,
             expandedIds: new Set([seeded.hierarchy.id]),
           };
+        }
+        // v3→v4: подсыпаем справочники Простоев.Нет (ВВ, операции,
+        // специальности, характеристики), если пользователь ещё ничего
+        // не загружал.
+        const r = next.references;
+        const refsEmpty =
+          !r ||
+          ((r.actions?.length ?? 0) === 0 &&
+            (r.operations?.length ?? 0) === 0 &&
+            (r.specialties?.length ?? 0) === 0 &&
+            (r.units?.length ?? 0) === 0);
+        if (refsEmpty) {
+          next = { ...next, references: SEED_REFERENCES };
         }
         return next as Partial<Store>;
       },
