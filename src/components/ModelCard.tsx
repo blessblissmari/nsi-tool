@@ -878,7 +878,6 @@ export function ModelCard({ modelId }: { modelId: string }) {
           <thead>
             <tr>
               <th style={{ width: 110 }}>ВВ</th>
-              <th style={{ width: 110 }}>Тип</th>
               <th style={{ width: 110 }}>Период, ч</th>
               <th style={{ width: 110 }}>Период, ≈</th>
               <th style={{ width: 90 }}>Источник</th>
@@ -890,7 +889,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
           <tbody>
             {items.length === 0 && (
               <tr>
-                <td colSpan={8} className="muted">
+                <td colSpan={7} className="muted">
                   Нет ВВ. Загрузите файл «Виды воздействия на ТОР ист/инт.xlsx»
                   кнопкой «Загрузить» в шапке, либо «+ ВВ», либо «Предложить
                   через ИИ».
@@ -908,22 +907,6 @@ export function ModelCard({ modelId }: { modelId: string }) {
                       })
                     }
                   />
-                </td>
-                <td>
-                  <select
-                    value={a.kind ?? 'other'}
-                    onChange={(e) =>
-                      updateItem(a.id, {
-                        kind: e.target.value as ActionKind,
-                      })
-                    }
-                  >
-                    <option value="TO">ТО</option>
-                    <option value="repair">Ремонт</option>
-                    <option value="inspection">Осмотр</option>
-                    <option value="diagnostic">Диагностика</option>
-                    <option value="other">Прочее</option>
-                  </select>
                 </td>
                 <td>
                   <input
