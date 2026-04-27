@@ -40,6 +40,27 @@ export interface AiProvider {
   }): Promise<
     Array<Pick<ActionItem, 'name' | 'kind' | 'periodHours'> & { reason?: string }>
   >;
+
+  /**
+   * Обогащение характеристик из «интернета» (п.6.3 ТЗ — функция обогащения
+   * значений характеристик из открытых источников). Вход — модель + список
+   * приоритетных характеристик, выход — типовые/паспортные значения,
+   * полученные из общедоступной информации о модели.
+   *
+   * В отличие от `extractCharacteristics`, не требует текста документа:
+   * используется знание провайдера о конкретных моделях оборудования.
+   */
+  enrichCharacteristicsFromWeb(input: {
+    model: Pick<EquipmentModel, 'className' | 'subclassName' | 'normalizedCode' | 'rawCode'>;
+    keys: Array<{ key: string; unit?: string }>;
+  }): Promise<
+    Array<
+      Pick<Characteristic, 'key' | 'valueRaw' | 'unit'> & {
+        confidence?: number;
+        reason?: string;
+      }
+    >
+  >;
 }
 
 /** Локальная заглушка — ничего не возвращает. Не делает сетевых вызовов. */
@@ -51,6 +72,9 @@ export const noopAiProvider: AiProvider = {
     return [];
   },
   async suggestActions() {
+    return [];
+  },
+  async enrichCharacteristicsFromWeb() {
     return [];
   },
 };

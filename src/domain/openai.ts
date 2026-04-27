@@ -276,4 +276,68 @@ ${text}`;
       .filter((x) => x.name && typeof x.periodHours === 'number')
       .slice(0, 12);
   },
+
+  async enrichCharacteristicsFromWeb(input: {
+    model: Pick<EquipmentModel, 'className' | 'subclassName' | 'normalizedCode' | 'rawCode'>;
+    keys: Array<{ key: string; unit?: string }>;
+  }): Promise<
+    Array<
+      Pick<Characteristic, 'key' | 'valueRaw' | 'unit'> & {
+        confidence?: number;
+        reason?: string;
+      }
+    >
+  > {
+    const code =
+      input.model.normalizedCode || input.model.rawCode || '';
+    const cacheKey =
+      'enrichChars:' +
+      fingerprint(
+        code,
+        input.model.className,
+        input.model.subclassName,
+        input.keys,
+      );
+    const system =
+      'Ты помощник по паспортным характеристикам промышленного оборудования. ' +
+      'На основании общедоступных каталогов и руководств производителей ' +
+      'верни типовые/паспортные значения запрошенных характеристик для указанной модели. ' +
+      'Если по конкретной модели данных нет — пропусти ключ (не угадывай). ' +
+      'Возвращай ТОЛЬКО json вида ' +
+      '{"items":[{"key":"...","valueRaw":"...","unit":"...","confidence":0.0-1.0,"reason":"кратко источник/обоснование"}]}. ' +
+      'valueRaw — численное/строковое значение (без формул); ' +
+      'unit — единица в той форме, что попросили (или ближайшая). ' +
+      'confidence: 0.9 если параметр стандартный для серии и однозначен, ' +
+      '0.6–0.8 если есть разброс по модификациям, 0.3–0.5 если значение оценочное.';
+    const user = `Модель: ${code}
+Класс: ${input.model.className ?? '—'}
+Подкласс: ${input.model.subclassName ?? '—'}
+Запрошенные характеристики (JSON): ${JSON.stringify(input.keys)}`;
+    type Out = {
+      items?: Array<{
+        key: string;
+        valueRaw: string;
+        unit?: string;
+        confidence?: number;
+        reason?: string;
+      }>;
+    };
+    const result = await callOpenAI<Out>(cacheKey, {
+      system,
+      user,
+      maxTokens: 600,
+    });
+    if (!result?.items) return [];
+    const validKeys = new Set(input.keys.map((k) => k.key));
+    return result.items
+      .filter((x) => x.key && x.valueRaw && validKeys.has(x.key))
+      .map((x) => ({
+        key: x.key,
+        valueRaw: x.valueRaw,
+        unit: x.unit,
+        confidence:
+          typeof x.confidence === 'number' ? x.confidence : undefined,
+        reason: x.reason,
+      }));
+  },
 };

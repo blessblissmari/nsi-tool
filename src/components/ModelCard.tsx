@@ -861,7 +861,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
           source: 'manual',
         },
       ]);
-    const aiSuggest = async () => {
+    const aiSuggest = async (sourceTag: 'ai' | 'web' = 'ai') => {
       if (!m.className) {
         alert('Сначала определите класс модели.');
         return;
@@ -875,24 +875,28 @@ export function ModelCard({ modelId }: { modelId: string }) {
           },
         });
         if (!proposals.length) {
-          alert('ИИ не предложил вариантов.');
+          alert(
+            sourceTag === 'web'
+              ? 'По модели не нашлось общедоступных регламентов ВВ.'
+              : 'ИИ не предложил вариантов.',
+          );
           return;
         }
         const locked = items.filter((x) => x.lockedByExpert);
         const lockedNames = new Set(
           locked.map((x) => x.name.toLowerCase().trim()),
         );
-        const aiItems: ActionItem[] = proposals
+        const newItems: ActionItem[] = proposals
           .filter((p) => !lockedNames.has(p.name.toLowerCase().trim()))
           .map((p) => ({
             id: newId('a'),
             name: p.name,
             kind: p.kind,
             periodHours: p.periodHours,
-            source: 'ai' as const,
+            source: sourceTag,
             note: p.reason,
           }));
-        setItems([...locked, ...aiItems]);
+        setItems([...locked, ...newItems]);
       } catch (e) {
         alert('Ошибка ИИ: ' + (e as Error).message);
       }
@@ -902,7 +906,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
       <div>
         <div className="row-flex" style={{ gap: 6, marginBottom: 6 }}>
           <button
-            onClick={aiSuggest}
+            onClick={() => aiSuggest('ai')}
             disabled={!getApiKey() || !m.className}
             title={
               !getApiKey()
@@ -913,6 +917,19 @@ export function ModelCard({ modelId }: { modelId: string }) {
             }
           >
             Предложить через ИИ
+          </button>
+          <button
+            onClick={() => aiSuggest('web')}
+            disabled={!getApiKey() || !m.className}
+            title={
+              !getApiKey()
+                ? 'Подключите OpenAI ключ в «Настройках»'
+                : !m.className
+                  ? 'Сначала определите класс модели'
+                  : 'Подобрать ВВ из общедоступных регламентов / руководств производителя (п.6.4 ТЗ)'
+            }
+          >
+            Обогатить из интернета
           </button>
           <span className="muted small">
             ВВ: {items.length} (
@@ -1584,6 +1601,72 @@ export function ModelCard({ modelId }: { modelId: string }) {
       setChars([...locked, ...filtered]);
     };
 
+    const buildPriorityKeys = (): Array<{ key: string; unit?: string }> => {
+      const keys: Array<{ key: string; unit?: string }> = [];
+      for (const p of cls?.priorityChars ?? []) keys.push({ key: p.key, unit: p.unit });
+      for (const p of sub?.priorityChars ?? []) {
+        if (!keys.find((k) => k.key === p.key)) keys.push({ key: p.key, unit: p.unit });
+      }
+      return keys;
+    };
+
+    const enrichFromWeb = async () => {
+      if (!m.className) {
+        alert('Сначала определите класс модели.');
+        return;
+      }
+      const keys = buildPriorityKeys();
+      if (!keys.length) {
+        alert(
+          'Не заданы приоритетные характеристики класса/подкласса. Загрузите классификатор.',
+        );
+        return;
+      }
+      try {
+        const items = await aiProvider().enrichCharacteristicsFromWeb({
+          model: {
+            className: m.className,
+            subclassName: m.subclassName,
+            normalizedCode: m.normalizedCode,
+            rawCode: m.rawCode,
+          },
+          keys,
+        });
+        if (!items.length) {
+          alert(
+            'По модели не нашлось общедоступных данных. Попробуйте уточнить код модели или класс.',
+          );
+          return;
+        }
+        const existing = m.characteristics ?? [];
+        const locked = existing.filter((c) => c.lockedByExpert);
+        const lockedKeys = new Set(locked.map((c) => c.key.toLowerCase()));
+        // Берём существующие НЕ-приоритетные характеристики и НЕ-перезаписываемые ручные значения
+        const keepManual = existing.filter(
+          (c) =>
+            !c.lockedByExpert &&
+            c.source === 'manual' &&
+            !!c.valueRaw &&
+            !keys.find((k) => k.key === c.key),
+        );
+        const webChars: Characteristic[] = items
+          .filter((x) => !lockedKeys.has(x.key.toLowerCase()))
+          .map((x) => ({
+            id: newId('c'),
+            key: x.key,
+            valueRaw: x.valueRaw,
+            unit: x.unit,
+            targetUnit: keys.find((k) => k.key === x.key)?.unit,
+            isPriority: true,
+            priorityOrder: keys.findIndex((k) => k.key === x.key),
+            source: 'web' as const,
+          }));
+        setChars([...locked, ...keepManual, ...webChars]);
+      } catch (e) {
+        alert('Ошибка ИИ: ' + (e as Error).message);
+      }
+    };
+
     const aiExtract = async () => {
       const docs = m.documents ?? [];
       const text = docs
@@ -1596,11 +1679,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
         );
         return;
       }
-      const keys: Array<{ key: string; unit?: string }> = [];
-      for (const p of cls?.priorityChars ?? []) keys.push({ key: p.key, unit: p.unit });
-      for (const p of sub?.priorityChars ?? []) {
-        if (!keys.find((k) => k.key === p.key)) keys.push({ key: p.key, unit: p.unit });
-      }
+      const keys = buildPriorityKeys();
       if (!keys.length) {
         alert(
           'Не заданы приоритетные характеристики класса/подкласса. Загрузите классификатор.',
@@ -1658,6 +1737,19 @@ export function ModelCard({ modelId }: { modelId: string }) {
             }
           >
             Извлечь через ИИ
+          </button>
+          <button
+            onClick={enrichFromWeb}
+            disabled={!getApiKey() || !m.className}
+            title={
+              !getApiKey()
+                ? 'Подключите OpenAI ключ в «Настройках»'
+                : !m.className
+                  ? 'Сначала определите класс модели'
+                  : 'Обогатить характеристики типовыми значениями из общедоступных каталогов и руководств производителей (п.6.3 ТЗ)'
+            }
+          >
+            Обогатить из интернета
           </button>
           {missing.length > 0 && (
             <span className="muted small">
