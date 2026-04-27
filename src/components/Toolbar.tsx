@@ -10,8 +10,6 @@ export function Toolbar() {
   const [msg, setMsg] = useState('');
   const setHierarchy = useStore((s) => s.setHierarchy);
   const setClassifier = useStore((s) => s.setClassifier);
-  const expandAll = useStore((s) => s.expandAll);
-  const collapseAll = useStore((s) => s.collapseAll);
   const normalizeAll = useStore((s) => s.normalizeAll);
   const classifyByClassifier = useStore((s) => s.classifyByClassifier);
   const applyClassification = useStore((s) => s.applyClassification);
@@ -191,10 +189,6 @@ export function Toolbar() {
       >
         Классифицировать ИИ
       </button>
-
-      <span className="sep" />
-      <button onClick={expandAll} title="Развернуть всё дерево">Развернуть</button>
-      <button onClick={collapseAll} title="Свернуть дерево">Свернуть</button>
 
       <span className="sep" />
       <button
