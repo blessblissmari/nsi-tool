@@ -25,8 +25,8 @@ export const SEED_CLASSIFIER: Classifier = {
         { key: 'Мощность', unit: 'кВт', type: 'number' },
       ],
       subclasses: [
-        { name: 'Центробежные', keywords: ['центробеж', 'нм', 'к-', 'км-', 'кмс'] },
-        { name: 'Шестерёнчатые', keywords: ['шестер', 'нш', 'gear'] },
+        { name: 'Центробежные', keywords: ['центробеж', 'нм', 'nm', 'к-', 'км-', 'кмс', 'kms', 'km-'] },
+        { name: 'Шестерёнчатые', keywords: ['шестер', 'нш', 'nsh', 'gear'] },
         { name: 'Винтовые', keywords: ['винтов', 'screw'] },
         { name: 'Поршневые', keywords: ['поршн', 'piston'] },
         { name: 'Мембранные', keywords: ['мембр', 'диафраг'] },
@@ -41,7 +41,7 @@ export const SEED_CLASSIFIER: Classifier = {
         { key: 'Частота вращения', unit: 'об/мин', type: 'number', aliases: ['обороты', 'rpm'] },
       ],
       subclasses: [
-        { name: 'Асинхронные', keywords: ['асинхрон', 'аир', 'ад', 'аим', '4а'] },
+        { name: 'Асинхронные', keywords: ['асинхрон', 'аир', 'air', 'ад', 'аим', 'aim', '4а', '4a'] },
         { name: 'Постоянного тока', keywords: ['постоянного тока', 'дпт', 'dc'] },
         { name: 'Синхронные', keywords: ['синхрон', 'sd'] },
       ],
@@ -68,14 +68,14 @@ export const SEED_CLASSIFIER: Classifier = {
         { key: 'Крутящий момент', unit: 'Н*м', type: 'number' },
       ],
       subclasses: [
-        { name: 'Цилиндрические', keywords: ['цилиндр', 'ц2', 'ц3'] },
+        { name: 'Цилиндрические', keywords: ['цилиндр', 'ц2', 'ц3', 'c2', 'c3'] },
         { name: 'Червячные', keywords: ['червяч'] },
         { name: 'Планетарные', keywords: ['планетар'] },
       ],
     },
     {
       name: 'Вентиляторы',
-      keywords: ['вентилятор', 'fan', 'вц-', 'во-'],
+      keywords: ['вентилятор', 'fan', 'вц-', 'во-', 'vc-', 'vo-'],
       priorityChars: [
         { key: 'Производительность', unit: 'м3/ч', type: 'number' },
         { key: 'Напор', unit: 'Па', type: 'number' },
@@ -94,7 +94,7 @@ export const SEED_CLASSIFIER: Classifier = {
         { key: 'Давление', unit: 'МПа', type: 'number' },
       ],
       subclasses: [
-        { name: 'Резервуары', keywords: ['резервуар', 'рвс'] },
+        { name: 'Резервуары', keywords: ['резервуар', 'рвс', 'rvs'] },
         { name: 'Цистерны', keywords: ['цистерн'] },
         { name: 'Баки', keywords: ['бак'] },
       ],
@@ -119,7 +119,7 @@ export const SEED_CLASSIFIER: Classifier = {
         { key: 'PN', unit: 'МПа', type: 'number', aliases: ['давление'] },
       ],
       subclasses: [
-        { name: 'Задвижки', keywords: ['задвижк', '30с', '30ч'] },
+        { name: 'Задвижки', keywords: ['задвижк', '30с', '30ч', '30c'] },
         { name: 'Клапаны', keywords: ['клапан'] },
         { name: 'Краны', keywords: ['кран ', 'шаров'] },
       ],
