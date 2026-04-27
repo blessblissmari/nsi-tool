@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import { useStore } from '../store';
 import { autoImportFile } from '../parsers/autoImport';
+import { downloadWorkbook } from '../parsers/export';
 import { aiProvider } from '../domain/ai';
 import { getApiKey } from '../domain/openai';
 
@@ -194,6 +195,19 @@ export function Toolbar() {
       <span className="sep" />
       <button onClick={expandAll} title="Развернуть всё дерево">Развернуть</button>
       <button onClick={collapseAll} title="Свернуть дерево">Свернуть</button>
+
+      <span className="sep" />
+      <button
+        title="Экспорт в XLSX: листы «Иерархия», «Классификация», «Характеристики», «ВВ»."
+        onClick={() => {
+          const s = useStore.getState();
+          const stamp = new Date().toISOString().slice(0, 10);
+          downloadWorkbook(s.hierarchy, s.models, `nsi-${stamp}.xlsx`);
+          setMsg('Экспорт сформирован.');
+        }}
+      >
+        Экспорт
+      </button>
 
       <span className="sep" />
       <button
