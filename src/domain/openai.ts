@@ -340,4 +340,75 @@ ${text}`;
         reason: x.reason,
       }));
   },
+
+  async enrichBomFromWeb(input: {
+    model: Pick<EquipmentModel, 'className' | 'subclassName' | 'normalizedCode' | 'rawCode'>;
+    actions: Array<{ id: string; name: string }>;
+    mode: 'bom' | 'apl';
+  }) {
+    const code = input.model.normalizedCode || input.model.rawCode || '';
+    const cacheKey =
+      'enrichBom:' +
+      fingerprint(
+        code,
+        input.model.className,
+        input.model.subclassName,
+        input.mode,
+        input.actions.map((a) => a.name),
+      );
+    const modeText =
+      input.mode === 'bom'
+        ? 'BOM (Bill of Materials) — полный перечень ТМЦ для ТОиР: материалы (расходники: масла, смазки, прокладки, уплотнения, фильтры) + запасные части (подшипники, валы, рабочие колёса).'
+        : 'APL (Application Parts List) — перечень запасных частей для ВВ ТОиР, БЕЗ расходных материалов. Только запчасти (подшипники, рабочие колёса, валы, торцевые уплотнения, муфты).';
+    const system =
+      'Ты помощник по типовым перечням ТМЦ для промышленного оборудования. ' +
+      'На основании общедоступных каталогов запчастей и руководств по эксплуатации ' +
+      `сформируй ${modeText} ` +
+      'Привязывай позиции к ВВ из переданного списка по id. Если ВВ непонятно — оставь actionId пустым. ' +
+      'Возвращай ТОЛЬКО json вида ' +
+      '{"items":[{"actionId":"...","tmcName":"...","tmcKind":"material|spare","tmcUnit":"шт|кг|л|м","tmcQty":1,"confidence":0.0-1.0,"reason":"кратко"}]}. ' +
+      (input.mode === 'apl'
+        ? 'tmcKind должен быть только "spare" (без материалов). '
+        : '') +
+      'confidence: 0.9 если позиция стандартная для класса, 0.6-0.8 если зависит от модификации, 0.3-0.5 — оценка.';
+    const user = `Модель: ${code}
+Класс: ${input.model.className ?? '—'}
+Подкласс: ${input.model.subclassName ?? '—'}
+Список ВВ (JSON): ${JSON.stringify(input.actions)}
+Режим: ${input.mode.toUpperCase()}`;
+    type Out = {
+      items?: Array<{
+        actionId?: string;
+        tmcName: string;
+        tmcKind: 'material' | 'spare';
+        tmcUnit?: string;
+        tmcQty?: number;
+        confidence?: number;
+        reason?: string;
+      }>;
+    };
+    const result = await callOpenAI<Out>(cacheKey, {
+      system,
+      user,
+      maxTokens: 900,
+    });
+    if (!result?.items) return [];
+    const validActionIds = new Set(input.actions.map((a) => a.id));
+    return result.items
+      .filter((x) => x.tmcName && (x.tmcKind === 'material' || x.tmcKind === 'spare'))
+      .filter((x) => input.mode === 'bom' || x.tmcKind === 'spare')
+      .map((x) => ({
+        actionId:
+          x.actionId && validActionIds.has(x.actionId) ? x.actionId : undefined,
+        actionName: input.actions.find((a) => a.id === x.actionId)?.name,
+        tmcName: x.tmcName,
+        tmcKind: x.tmcKind,
+        tmcUnit: x.tmcUnit,
+        tmcQty: typeof x.tmcQty === 'number' ? x.tmcQty : undefined,
+        confidence:
+          typeof x.confidence === 'number' ? x.confidence : undefined,
+        reason: x.reason,
+      }))
+      .slice(0, 30);
+  },
 };

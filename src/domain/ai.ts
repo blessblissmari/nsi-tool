@@ -61,6 +61,29 @@ export interface AiProvider {
       }
     >
   >;
+
+  /**
+   * Обогащение спецификаций (BOM/APL) из «интернета» (п.6.6 ТЗ).
+   * Возвращает типовой перечень ТМЦ для модели, привязанный к конкретным ВВ.
+   * `mode='bom'` — материалы + запчасти (полный перечень ТМЦ);
+   * `mode='apl'` — только запчасти/инструменты, без расходных материалов.
+   */
+  enrichBomFromWeb(input: {
+    model: Pick<EquipmentModel, 'className' | 'subclassName' | 'normalizedCode' | 'rawCode'>;
+    actions: Array<{ id: string; name: string }>;
+    mode: 'bom' | 'apl';
+  }): Promise<
+    Array<{
+      actionId?: string;
+      actionName?: string;
+      tmcName: string;
+      tmcKind: 'material' | 'spare';
+      tmcUnit?: string;
+      tmcQty?: number;
+      confidence?: number;
+      reason?: string;
+    }>
+  >;
 }
 
 /** Локальная заглушка — ничего не возвращает. Не делает сетевых вызовов. */
@@ -75,6 +98,9 @@ export const noopAiProvider: AiProvider = {
     return [];
   },
   async enrichCharacteristicsFromWeb() {
+    return [];
+  },
+  async enrichBomFromWeb() {
     return [];
   },
 };

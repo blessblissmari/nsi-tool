@@ -1891,9 +1891,62 @@ export function ModelCard({ modelId }: { modelId: string }) {
 
   function SpecsTab({ modelId }: { modelId: string }) {
     const m = useStore((s) => s.models.find((x) => x.id === modelId));
+    const allModels = useStore((s) => s.models);
+    const upsertTcRow = useStore((s) => s.upsertTechCardRow);
+    const [busy, setBusy] = useState<'bom' | 'apl' | null>(null);
+    const [webSuggestions, setWebSuggestions] = useState<{
+      mode: 'bom' | 'apl';
+      items: Array<{
+        actionId?: string;
+        actionName?: string;
+        tmcName: string;
+        tmcKind: 'material' | 'spare';
+        tmcUnit?: string;
+        tmcQty?: number;
+        confidence?: number;
+        reason?: string;
+      }>;
+    } | null>(null);
+    const [analogsOpen, setAnalogsOpen] = useState<'bom' | 'apl' | null>(null);
     if (!m) return null;
     const rows = m.techCard ?? [];
     const acts = m.actions ?? [];
+    const hasKey = !!getApiKey();
+
+    async function enrichFromWeb(mode: 'bom' | 'apl') {
+      if (!m || busy) return;
+      if (!hasKey) {
+        alert('Укажите OpenAI ключ в «Настройках».');
+        return;
+      }
+      setBusy(mode);
+      try {
+        const items = await aiProvider().enrichBomFromWeb({
+          model: {
+            className: m.className,
+            subclassName: m.subclassName,
+            normalizedCode: m.normalizedCode,
+            rawCode: m.rawCode,
+          },
+          actions: acts.map((a) => ({ id: a.id, name: a.name })),
+          mode,
+        });
+        if (items.length === 0) {
+          alert(
+            'Из открытых источников не удалось предложить позиции — попробуйте указать класс/подкласс точнее.',
+          );
+        } else {
+          setWebSuggestions({ mode, items });
+        }
+      } catch (e) {
+        alert(
+          'Ошибка обогащения из интернета: ' +
+            (e instanceof Error ? e.message : String(e)),
+        );
+      } finally {
+        setBusy(null);
+      }
+    }
 
     // BOM = плоский список всех ТМЦ из техкарт, агрегированный по
     // (наименование + ед.); инструмент в спецификацию не попадает (п.6.6 + созвон).
@@ -1924,14 +1977,15 @@ export function ModelCard({ modelId }: { modelId: string }) {
       a.name.localeCompare(b.name, 'ru'),
     );
 
-    // APL = тот же набор ТМЦ, но сгруппированный по ВВ (виду воздействия) —
-    // как подсказал заказчик в созвоне 00:47:07.
+    // APL (Application Parts List, п.6.6 / п.4 ТЗ) = «список компонентов для ВВ
+    // ТОиР, БЕЗ расходных материалов» — поэтому группируем по ВВ и фильтруем
+    // tmcKind === 'spare'. Расходники (масла, прокладки, фильтры) идут в BOM.
     const aplGroups = new Map<
       string,
       { actionName: string; actionKind?: ActionKind; items: typeof bom }
     >();
     for (const r of rows) {
-      if (!r.tmcName || !r.tmcKind) continue;
+      if (!r.tmcName || r.tmcKind !== 'spare') continue;
       const act = r.actionId ? acts.find((a) => a.id === r.actionId) : undefined;
       const groupId = act?.id ?? '__none__';
       const groupName = act?.name ?? 'Без привязки к ВВ';
@@ -1960,6 +2014,10 @@ export function ModelCard({ modelId }: { modelId: string }) {
         });
       }
     }
+    const aplCount = Array.from(aplGroups.values()).reduce(
+      (sum, g) => sum + g.items.length,
+      0,
+    );
 
     const exportXlsx = () => {
       const ws1 = XLSX.utils.json_to_sheet(
@@ -1994,30 +2052,73 @@ export function ModelCard({ modelId }: { modelId: string }) {
       );
     };
 
-    if (rows.length === 0) {
-      return (
-        <div className="muted">
-          Нет техкарт. Добавьте строки на вкладке «Техкарты» — оттуда
-          собирается спецификация (BOM/APL). Инструмент в спецификацию не
-          попадает (п.6.6 ТЗ).
-        </div>
-      );
-    }
+    const isEmpty = rows.length === 0;
 
     return (
       <div>
-        <div className="row-flex" style={{ gap: 6, marginBottom: 6 }}>
+        <div className="row-flex" style={{ gap: 6, marginBottom: 6, flexWrap: 'wrap' }}>
           <span className="muted small">
-            BOM: {bom.length} позиций (агрегировано из {rows.length} строк
-            техкарт). APL: то же, сгруппировано по ВВ ({aplGroups.size} групп).
+            {isEmpty
+              ? 'Техкарт нет. Дополните спецификацию из интернета или из аналогов — позиции добавятся в техкарты автоматически.'
+              : `BOM: ${bom.length} позиций · APL: ${aplCount} запчастей в ${aplGroups.size} ВВ · из ${rows.length} строк техкарт. Инструмент в спецификацию не попадает (п.6.6 ТЗ).`}
           </span>
           <span className="spacer" />
           <button onClick={exportXlsx} disabled={!bom.length}>
             Экспорт xlsx
           </button>
         </div>
+        <div className="row-flex" style={{ gap: 4, marginBottom: 8, flexWrap: 'wrap' }}>
+          <button
+            disabled={!hasKey || !!busy || acts.length === 0}
+            title={
+              !hasKey
+                ? 'Укажите OpenAI ключ в «Настройках»'
+                : acts.length === 0
+                  ? 'Сначала добавьте ВВ во вкладке «ВВ»'
+                  : 'Дополнить BOM типовыми позициями из открытых источников (п.6.6 ТЗ)'
+            }
+            onClick={() => enrichFromWeb('bom')}
+          >
+            {busy === 'bom' ? '…' : 'BOM из интернета'}
+          </button>
+          <button
+            disabled={!hasKey || !!busy || acts.length === 0}
+            title={
+              !hasKey
+                ? 'Укажите OpenAI ключ в «Настройках»'
+                : acts.length === 0
+                  ? 'Сначала добавьте ВВ во вкладке «ВВ»'
+                  : 'Дополнить APL типовыми запчастями из открытых источников (п.6.6 ТЗ)'
+            }
+            onClick={() => enrichFromWeb('apl')}
+          >
+            {busy === 'apl' ? '…' : 'APL из интернета'}
+          </button>
+          <button
+            disabled={!m.className}
+            title={
+              !m.className
+                ? 'Сначала классифицируйте модель'
+                : 'Найти аналоги BOM в других моделях того же класса/подкласса'
+            }
+            onClick={() => setAnalogsOpen('bom')}
+          >
+            Поиск аналогов BOM
+          </button>
+          <button
+            disabled={!m.className}
+            title={
+              !m.className
+                ? 'Сначала классифицируйте модель'
+                : 'Найти аналоги APL в других моделях того же класса/подкласса'
+            }
+            onClick={() => setAnalogsOpen('apl')}
+          >
+            Поиск аналогов APL
+          </button>
+        </div>
 
-        <h4 style={{ margin: '8px 0 4px' }}>BOM — материалы и запчасти</h4>
+        <h4 style={{ margin: '8px 0 4px' }}>BOM — все ТМЦ (материалы + запчасти)</h4>
         <table className="models">
           <thead>
             <tr>
@@ -2041,7 +2142,9 @@ export function ModelCard({ modelId }: { modelId: string }) {
           </tbody>
         </table>
 
-        <h4 style={{ margin: '12px 0 4px' }}>APL — те же ТМЦ в разрезе ВВ</h4>
+        <h4 style={{ margin: '12px 0 4px' }}>
+          APL — запчасти в разрезе ВВ (без расходных материалов)
+        </h4>
         {Array.from(aplGroups.values()).map((g, gi) => (
           <div key={gi} style={{ marginBottom: 8 }}>
             <div className="muted small" style={{ marginBottom: 2 }}>
@@ -2074,6 +2177,50 @@ export function ModelCard({ modelId }: { modelId: string }) {
             </table>
           </div>
         ))}
+        {webSuggestions && (
+          <BomSuggestionsModal
+            modelId={modelId}
+            mode={webSuggestions.mode}
+            items={webSuggestions.items}
+            actions={acts}
+            onAccept={(picked) => {
+              for (const x of picked) {
+                upsertTcRow(modelId, {
+                  actionId: x.actionId,
+                  tmcName: x.tmcName,
+                  tmcKind: x.tmcKind,
+                  tmcUnit: x.tmcUnit,
+                  tmcQty: x.tmcQty,
+                  source: 'web',
+                });
+              }
+              setWebSuggestions(null);
+            }}
+            onClose={() => setWebSuggestions(null)}
+          />
+        )}
+        {analogsOpen && (
+          <BomAnalogsModal
+            modelId={modelId}
+            mode={analogsOpen}
+            currentModel={m}
+            allModels={allModels}
+            onAccept={(picked) => {
+              for (const x of picked) {
+                upsertTcRow(modelId, {
+                  actionId: x.actionId,
+                  tmcName: x.tmcName,
+                  tmcKind: x.tmcKind,
+                  tmcUnit: x.tmcUnit,
+                  tmcQty: x.tmcQty,
+                  source: 'analog',
+                });
+              }
+              setAnalogsOpen(null);
+            }}
+            onClose={() => setAnalogsOpen(null)}
+          />
+        )}
       </div>
     );
   }
@@ -2226,6 +2373,375 @@ function labelSource(s: ActionItem['source']): string {
     default:
       return String(s);
   }
+}
+
+/** Общая обёртка модального окна (затемнение + стоп-пропагация). */
+function ModalShell({
+  title,
+  onClose,
+  children,
+  width = 760,
+}: {
+  title: string;
+  onClose: () => void;
+  children: React.ReactNode;
+  width?: number;
+}) {
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(0,0,0,0.3)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 60,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: 'white',
+          padding: 14,
+          minWidth: 520,
+          maxWidth: width,
+          width,
+          maxHeight: '85vh',
+          overflow: 'auto',
+          border: '1px solid #999',
+        }}
+      >
+        <div className="row-flex" style={{ alignItems: 'center', gap: 6 }}>
+          <h3 style={{ margin: 0 }}>{title}</h3>
+          <span className="spacer" />
+          <button onClick={onClose}>×</button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/** Модалка «Предложения BOM/APL из интернета» — выбор позиций и добавление. */
+function BomSuggestionsModal({
+  mode,
+  items,
+  actions,
+  onAccept,
+  onClose,
+}: {
+  modelId: string;
+  mode: 'bom' | 'apl';
+  items: Array<{
+    actionId?: string;
+    actionName?: string;
+    tmcName: string;
+    tmcKind: 'material' | 'spare';
+    tmcUnit?: string;
+    tmcQty?: number;
+    confidence?: number;
+    reason?: string;
+  }>;
+  actions: ActionItem[];
+  onAccept: (
+    picked: Array<{
+      actionId?: string;
+      tmcName: string;
+      tmcKind: 'material' | 'spare';
+      tmcUnit?: string;
+      tmcQty?: number;
+    }>,
+  ) => void;
+  onClose: () => void;
+}) {
+  const [checked, setChecked] = useState<Set<number>>(
+    () => new Set(items.map((_, i) => i)),
+  );
+  const toggle = (i: number) => {
+    const next = new Set(checked);
+    if (next.has(i)) next.delete(i);
+    else next.add(i);
+    setChecked(next);
+  };
+  const picked = items.filter((_, i) => checked.has(i));
+  const titlePrefix = mode === 'bom' ? 'BOM' : 'APL';
+  return (
+    <ModalShell
+      title={`${titlePrefix} из интернета — выбор позиций`}
+      onClose={onClose}
+    >
+      <div className="muted small" style={{ margin: '6px 0' }}>
+        Отметьте позиции, которые добавить в техкарту с источником «инт.»
+        (фиолетовый бейдж). Привязка к ВВ берётся из ответа провайдера.
+      </div>
+      <table className="models">
+        <thead>
+          <tr>
+            <th style={{ width: 28 }}>+</th>
+            <th>Наименование</th>
+            <th style={{ width: 80 }}>Тип</th>
+            <th style={{ width: 70 }}>Ед.</th>
+            <th style={{ width: 60 }}>Кол.</th>
+            <th>ВВ</th>
+            <th style={{ width: 56 }}>Conf.</th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((x, i) => {
+            const act = x.actionId
+              ? actions.find((a) => a.id === x.actionId)
+              : undefined;
+            return (
+              <tr key={i} title={x.reason ?? ''}>
+                <td>
+                  <input
+                    type="checkbox"
+                    checked={checked.has(i)}
+                    onChange={() => toggle(i)}
+                  />
+                </td>
+                <td>{x.tmcName}</td>
+                <td>
+                  {x.tmcKind === 'material' ? 'материал' : 'запчасть'}
+                </td>
+                <td>{x.tmcUnit ?? '—'}</td>
+                <td className="mono">{x.tmcQty ?? '—'}</td>
+                <td className="muted small">{act?.name ?? x.actionName ?? '—'}</td>
+                <td className="mono small">
+                  {x.confidence !== undefined
+                    ? Math.round(x.confidence * 100) + '%'
+                    : '—'}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <div
+        className="row-flex"
+        style={{ marginTop: 10, gap: 6, justifyContent: 'flex-end' }}
+      >
+        <button onClick={onClose}>Отмена</button>
+        <button
+          disabled={picked.length === 0}
+          onClick={() =>
+            onAccept(
+              picked.map((x) => ({
+                actionId: x.actionId,
+                tmcName: x.tmcName,
+                tmcKind: x.tmcKind,
+                tmcUnit: x.tmcUnit,
+                tmcQty: x.tmcQty,
+              })),
+            )
+          }
+        >
+          Добавить выбранные ({picked.length})
+        </button>
+      </div>
+    </ModalShell>
+  );
+}
+
+/** Модалка «Поиск аналогов BOM/APL» — поиск похожих моделей и копирование позиций. */
+function BomAnalogsModal({
+  modelId,
+  mode,
+  currentModel,
+  allModels,
+  onAccept,
+  onClose,
+}: {
+  modelId: string;
+  mode: 'bom' | 'apl';
+  currentModel: import('../domain/types').EquipmentModel;
+  allModels: import('../domain/types').EquipmentModel[];
+  onAccept: (
+    picked: Array<{
+      actionId?: string;
+      tmcName: string;
+      tmcKind: 'material' | 'spare';
+      tmcUnit?: string;
+      tmcQty?: number;
+    }>,
+  ) => void;
+  onClose: () => void;
+}) {
+  // Аналоги — модели того же класса/подкласса, исключая текущую.
+  const analogs = allModels.filter(
+    (x) =>
+      x.id !== modelId &&
+      x.className === currentModel.className &&
+      (currentModel.subclassName == null ||
+        x.subclassName === currentModel.subclassName),
+  );
+
+  // Соберём кандидатные ТМЦ из аналогов: уникальные по (name + unit + kind),
+  // с подсчётом «у скольких аналогов встречается».
+  type Cand = {
+    actionId?: string;
+    actionName?: string;
+    tmcName: string;
+    tmcKind: 'material' | 'spare';
+    tmcUnit?: string;
+    tmcQty?: number;
+    sources: number; // у скольких моделей встретилась
+    fromModels: string[];
+  };
+  const candMap = new Map<string, Cand>();
+  for (const a of analogs) {
+    const seenInThisModel = new Set<string>();
+    for (const r of a.techCard ?? []) {
+      if (!r.tmcName || !r.tmcKind) continue;
+      if (mode === 'apl' && r.tmcKind !== 'spare') continue;
+      const key = `${r.tmcName.trim().toLowerCase()}|${(r.tmcUnit ?? '').toLowerCase()}|${r.tmcKind}`;
+      if (seenInThisModel.has(key)) continue;
+      seenInThisModel.add(key);
+      const exist = candMap.get(key);
+      const actName = r.actionId
+        ? a.actions?.find((x) => x.id === r.actionId)?.name
+        : undefined;
+      if (exist) {
+        exist.sources += 1;
+        exist.fromModels.push(a.normalizedCode || a.rawCode);
+      } else {
+        candMap.set(key, {
+          tmcName: r.tmcName.trim(),
+          tmcKind: r.tmcKind,
+          tmcUnit: r.tmcUnit,
+          tmcQty: r.tmcQty,
+          actionName: actName,
+          sources: 1,
+          fromModels: [a.normalizedCode || a.rawCode],
+        });
+      }
+    }
+  }
+
+  // Помечаем уже присутствующие позиции в нашей модели — чтобы не дублировать.
+  const existingKeys = new Set(
+    (currentModel.techCard ?? [])
+      .filter((r) => r.tmcName && r.tmcKind)
+      .map(
+        (r) =>
+          `${r.tmcName!.trim().toLowerCase()}|${(r.tmcUnit ?? '').toLowerCase()}|${r.tmcKind}`,
+      ),
+  );
+
+  const candidates = Array.from(candMap.entries())
+    .map(([key, v]) => ({ key, v, exists: existingKeys.has(key) }))
+    .sort((a, b) => b.v.sources - a.v.sources);
+
+  const [checked, setChecked] = useState<Set<string>>(new Set());
+  const toggle = (k: string) => {
+    const next = new Set(checked);
+    if (next.has(k)) next.delete(k);
+    else next.add(k);
+    setChecked(next);
+  };
+
+  const titlePrefix = mode === 'bom' ? 'BOM' : 'APL';
+  return (
+    <ModalShell
+      title={`Поиск аналогов ${titlePrefix} — ${analogs.length} модел${
+        analogs.length === 1 ? 'ь' : 'и'
+      } того же класса`}
+      onClose={onClose}
+      width={820}
+    >
+      <div className="muted small" style={{ margin: '6px 0' }}>
+        Класс: <b>{currentModel.className ?? '—'}</b>
+        {currentModel.subclassName && (
+          <> · подкласс: <b>{currentModel.subclassName}</b></>
+        )}
+        . Источник позиций — <code>techCard</code> аналогов; подмеченные позиции
+        копируются с источником «аналог» (красный бейдж).
+      </div>
+      {analogs.length === 0 ? (
+        <div className="muted" style={{ padding: 16 }}>
+          Аналогов не найдено. Создайте ещё хотя бы одну модель того же
+          класса/подкласса с заполненной техкартой.
+        </div>
+      ) : candidates.length === 0 ? (
+        <div className="muted" style={{ padding: 16 }}>
+          Аналоги найдены, но в их техкартах нет {mode === 'apl' ? 'запчастей' : 'ТМЦ'}.
+        </div>
+      ) : (
+        <table className="models">
+          <thead>
+            <tr>
+              <th style={{ width: 28 }}>+</th>
+              <th>Наименование</th>
+              <th style={{ width: 80 }}>Тип</th>
+              <th style={{ width: 70 }}>Ед.</th>
+              <th style={{ width: 60 }}>Кол.</th>
+              <th style={{ width: 64 }}>В моей</th>
+              <th>Из моделей</th>
+            </tr>
+          </thead>
+          <tbody>
+            {candidates.map((c) => (
+              <tr
+                key={c.key}
+                style={c.exists ? { opacity: 0.5 } : undefined}
+                title={c.exists ? 'Уже есть в текущей модели' : ''}
+              >
+                <td>
+                  <input
+                    type="checkbox"
+                    disabled={c.exists}
+                    checked={checked.has(c.key)}
+                    onChange={() => toggle(c.key)}
+                  />
+                </td>
+                <td>{c.v.tmcName}</td>
+                <td>{c.v.tmcKind === 'material' ? 'материал' : 'запчасть'}</td>
+                <td>{c.v.tmcUnit ?? '—'}</td>
+                <td className="mono">{c.v.tmcQty ?? '—'}</td>
+                <td className="mono small">{c.exists ? 'есть' : '—'}</td>
+                <td className="muted small">
+                  {c.v.fromModels.slice(0, 3).join(', ')}
+                  {c.v.fromModels.length > 3 && ` +${c.v.fromModels.length - 3}`}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <div
+        className="row-flex"
+        style={{ marginTop: 10, gap: 6, justifyContent: 'flex-end' }}
+      >
+        <button onClick={onClose}>Закрыть</button>
+        <button
+          disabled={checked.size === 0}
+          onClick={() => {
+            const picked: Array<{
+              actionId?: string;
+              tmcName: string;
+              tmcKind: 'material' | 'spare';
+              tmcUnit?: string;
+              tmcQty?: number;
+            }> = [];
+            for (const c of candidates) {
+              if (!checked.has(c.key) || c.exists) continue;
+              picked.push({
+                tmcName: c.v.tmcName,
+                tmcKind: c.v.tmcKind,
+                tmcUnit: c.v.tmcUnit,
+                tmcQty: c.v.tmcQty,
+              });
+            }
+            onAccept(picked);
+          }}
+        >
+          Скопировать выбранные ({checked.size})
+        </button>
+      </div>
+    </ModalShell>
+  );
 }
 
 /** Окно с фрагментом документа, на основании которого получено значение
