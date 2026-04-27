@@ -100,10 +100,14 @@ async function callOpenAI<T>(
     user: string;
     maxTokens: number;
     schema?: string;
+    /** Если true — игнорировать кэш и перезаписать его. */
+    bypassCache?: boolean;
+    /** Если задано — не кэшировать, когда функция вернула «пусто». */
+    isEmpty?: (value: unknown) => boolean;
   },
 ): Promise<T | undefined> {
   const cache = readCache();
-  if (cache[cacheKey]) {
+  if (!body.bypassCache && cache[cacheKey]) {
     return cache[cacheKey].value as T;
   }
   const key = getApiKey();
@@ -152,8 +156,14 @@ async function callOpenAI<T>(
   } catch {
     return undefined;
   }
-  cache[cacheKey] = { ts: Date.now(), value: parsed };
-  writeCache(cache);
+  // Не кэшируем пустые ответы — чтобы повторный клик реально повторил
+  // запрос (иначе `bom/apl не ищется`: первый пустой ответ навсегда
+  // залипает в localStorage).
+  const empty = body.isEmpty?.(parsed) ?? false;
+  if (!empty) {
+    cache[cacheKey] = { ts: Date.now(), value: parsed };
+    writeCache(cache);
+  }
   return parsed as T;
 }
 
@@ -361,21 +371,28 @@ ${text}`;
         ? 'BOM (Bill of Materials) — полный перечень ТМЦ для ТОиР: материалы (расходники: масла, смазки, прокладки, уплотнения, фильтры) + запасные части (подшипники, валы, рабочие колёса).'
         : 'APL (Application Parts List) — перечень запасных частей для ВВ ТОиР, БЕЗ расходных материалов. Только запчасти (подшипники, рабочие колёса, валы, торцевые уплотнения, муфты).';
     const system =
-      'Ты помощник по типовым перечням ТМЦ для промышленного оборудования. ' +
-      'На основании общедоступных каталогов запчастей и руководств по эксплуатации ' +
-      `сформируй ${modeText} ` +
-      'Привязывай позиции к ВВ из переданного списка по id. Если ВВ непонятно — оставь actionId пустым. ' +
+      'Ты инженер-эксперт по ТОиР промышленного оборудования и типовым ' +
+      'перечням ТМЦ. На основании общедоступных каталогов запчастей и ' +
+      `руководств по эксплуатации ты формируешь ${modeText} ` +
+      'Для класса/подкласса всегда есть типовой перечень — даже если точная ' +
+      'модификация неизвестна, перечисли стандартные позиции класса с ' +
+      'confidence 0.5-0.7. Минимум 8 позиций для BOM, 5 для APL. ' +
+      'Привязывай позиции к ВВ из переданного списка по id (actionId). ' +
       'Возвращай ТОЛЬКО json вида ' +
-      '{"items":[{"actionId":"...","tmcName":"...","tmcKind":"material|spare","tmcUnit":"шт|кг|л|м","tmcQty":1,"confidence":0.0-1.0,"reason":"кратко"}]}. ' +
+      '{"items":[{"actionId":"id-из-списка-или-пусто","tmcName":"Подшипник 6204","tmcKind":"material|spare","tmcUnit":"шт|кг|л|м","tmcQty":1,"confidence":0.7,"reason":"кратко"}]}. ' +
       (input.mode === 'apl'
         ? 'tmcKind должен быть только "spare" (без материалов). '
         : '') +
-      'confidence: 0.9 если позиция стандартная для класса, 0.6-0.8 если зависит от модификации, 0.3-0.5 — оценка.';
+      'confidence: 0.9 если позиция стандартная для класса, 0.6-0.8 если ' +
+      'зависит от модификации, 0.4-0.5 — общая оценка. Никогда не возвращай ' +
+      'пустой items: всегда есть типовые расходники/запчасти.';
     const user = `Модель: ${code}
 Класс: ${input.model.className ?? '—'}
 Подкласс: ${input.model.subclassName ?? '—'}
 Список ВВ (JSON): ${JSON.stringify(input.actions)}
-Режим: ${input.mode.toUpperCase()}`;
+Режим: ${input.mode.toUpperCase()}
+
+Сформируй типовой перечень ТМЦ, опираясь на класс «${input.model.className ?? '—'}» / подкласс «${input.model.subclassName ?? '—'}». Если модель точно неизвестна — всё равно перечисли стандартные для подкласса позиции.`;
     type Out = {
       items?: Array<{
         actionId?: string;
@@ -390,7 +407,11 @@ ${text}`;
     const result = await callOpenAI<Out>(cacheKey, {
       system,
       user,
-      maxTokens: 900,
+      maxTokens: 2500,
+      isEmpty: (v) => {
+        const items = (v as Out | undefined)?.items;
+        return !items || items.length === 0;
+      },
     });
     if (!result?.items) return [];
     const validActionIds = new Set(input.actions.map((a) => a.id));
@@ -410,5 +431,131 @@ ${text}`;
         reason: x.reason,
       }))
       .slice(0, 30);
+  },
+
+  async fillTechCardByTemplate(input) {
+    const code = input.model.normalizedCode || input.model.rawCode || '';
+    const cacheKey =
+      'techCard:' +
+      fingerprint(
+        code,
+        input.model.className,
+        input.model.subclassName,
+        input.actions.map((a) => a.name),
+      );
+    // Справочники выдаём коротко — иначе съедим весь лимит токенов.
+    const opList = (input.operations ?? [])
+      .slice(0, 100)
+      .map((o) => `"${o}"`)
+      .join(',');
+    const specList = (input.specialties ?? [])
+      .slice(0, 40)
+      .map(
+        (s) => `{"name":"${s.name}","qual":${JSON.stringify(s.qualifications.slice(0, 4))}}`,
+      )
+      .join(',');
+    const system =
+      'Ты инженер-эксперт по ТОиР промышленного оборудования. Формируешь ' +
+      'техкарту по шаблону «Простоев.Нет» (Элемент → Подэлемент → ' +
+      'Наименование операции → Вид ТОиР → Норма времени → Количество ' +
+      'исполнителей → Профессия/Квалификация → ТМЦ). Каждое ВВ из ' +
+      'переданного списка должно быть покрыто 2–6 строками (разные ' +
+      'компоненты / операции). Используй наименования операций и профессий ' +
+      'ИЗ предоставленных справочников, если они там есть. Не выдумывай ' +
+      'экзотику — выбирай стандартные операции (Демонтаж, Монтаж, ' +
+      'Проверка, Смазка, Замена, Диагностика, Регулировка). Возвращай ' +
+      'ТОЛЬКО json вида ' +
+      '{"rows":[{' +
+      '"actionId":"id-из-списка-ВВ",' +
+      '"component":"Ходовая часть",' +
+      '"subcomponent":"Колесо",' +
+      '"operation":"Демонтаж",' +
+      '"workDescription":"Снять компонент с креплений",' +
+      '"laborHours":4,' +
+      '"workers":2,' +
+      '"specialty":"Слесарь по ремонту оборудования",' +
+      '"qualification":"4 разряд",' +
+      '"totalLaborHours":8,' +
+      '"tmcName":"",' +
+      '"tmcKind":"material|spare",' +
+      '"tmcUnit":"шт|кг|л",' +
+      '"tmcQty":1,' +
+      '"tools":"Набор ключей гаечных, 1 компл",' +
+      '"ppe":"Каска, очки, перчатки",' +
+      '"safety":"Отключить питание, вывесить табличку",' +
+      '"confidence":0.7' +
+      '}]}. ' +
+      'Если ТМЦ для строки не требуется — оставь tmcName пустым. ' +
+      'totalLaborHours = laborHours × workers. Минимум 10 строк.';
+    const user = `Модель: ${code}
+Класс: ${input.model.className ?? '—'}
+Подкласс: ${input.model.subclassName ?? '—'}
+ВВ (JSON): ${JSON.stringify(input.actions)}
+Справочник операций (выбирай из них): [${opList}]
+Справочник специальностей: [${specList}]
+
+Сформируй типовую техкарту по шаблону, покрывая все ВВ.`;
+    type Row = {
+      actionId?: string;
+      component?: string;
+      subcomponent?: string;
+      operation?: string;
+      workDescription?: string;
+      laborHours?: number;
+      workers?: number;
+      specialty?: string;
+      qualification?: string;
+      totalLaborHours?: number;
+      tmcName?: string;
+      tmcKind?: 'material' | 'spare';
+      tmcUnit?: string;
+      tmcQty?: number;
+      tools?: string;
+      ppe?: string;
+      safety?: string;
+      confidence?: number;
+    };
+    type Out = { rows?: Row[] };
+    const result = await callOpenAI<Out>(cacheKey, {
+      system,
+      user,
+      maxTokens: 4000,
+      isEmpty: (v) => {
+        const rows = (v as Out | undefined)?.rows;
+        return !rows || rows.length === 0;
+      },
+    });
+    if (!result?.rows) return [];
+    const validActionIds = new Set(input.actions.map((a) => a.id));
+    return result.rows
+      .filter((x) => x.operation || x.component)
+      .map((x) => ({
+        actionId:
+          x.actionId && validActionIds.has(x.actionId) ? x.actionId : undefined,
+        component: x.component,
+        subcomponent: x.subcomponent,
+        operation: x.operation,
+        workDescription: x.workDescription,
+        laborHours:
+          typeof x.laborHours === 'number' ? x.laborHours : undefined,
+        workers: typeof x.workers === 'number' ? x.workers : undefined,
+        specialty: x.specialty,
+        qualification: x.qualification,
+        totalLaborHours:
+          typeof x.totalLaborHours === 'number' ? x.totalLaborHours : undefined,
+        tmcName: x.tmcName?.trim() ? x.tmcName.trim() : undefined,
+        tmcKind:
+          x.tmcKind === 'material' || x.tmcKind === 'spare'
+            ? x.tmcKind
+            : undefined,
+        tmcUnit: x.tmcUnit,
+        tmcQty: typeof x.tmcQty === 'number' ? x.tmcQty : undefined,
+        tools: x.tools,
+        ppe: x.ppe,
+        safety: x.safety,
+        confidence:
+          typeof x.confidence === 'number' ? x.confidence : undefined,
+      }))
+      .slice(0, 60);
   },
 };

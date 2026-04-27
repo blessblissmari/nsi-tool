@@ -60,18 +60,26 @@ export interface EquipmentModel {
 /** Одна строка техкарты в табличной форме «Модель → Компонент → Операция → ТМЦ». */
 export interface TechCardRow {
   id: string;
-  /** Компонент / узел / деталь модели. */
+  /** Компонент / узел / деталь модели (Элемент в шаблоне). */
   component?: string;
+  /** Подэлемент (детализация компонента). */
+  subcomponent?: string;
   /** Операция ТОиР (свободная или из справочника). */
   operation?: string;
+  /** Краткое содержание работ (раскрытие операции). */
+  workDescription?: string;
   /** Привязка к ВВ (id ActionItem). */
   actionId?: string;
+  /** Норма времени на операцию, часы (на одного исполнителя). */
+  laborHours?: number;
+  /** Минимальное количество исполнителей. */
+  workers?: number;
   /** Профессия исполнителя. */
   specialty?: string;
   /** Квалификация (разряд). */
   qualification?: string;
-  /** Трудоёмкость, нормо-ч. */
-  laborHours?: number;
+  /** Суммарная трудоёмкость, чел/ч = laborHours × workers. */
+  totalLaborHours?: number;
   /** ТМЦ — наименование (только материалы и запчасти, инструмент исключается). */
   tmcName?: string;
   /** Тип ТМЦ. */
@@ -80,6 +88,12 @@ export interface TechCardRow {
   tmcUnit?: string;
   /** Норма расхода ТМЦ на операцию. */
   tmcQty?: number;
+  /** Инструменты и приспособления (в BOM/APL не попадают, п.6.6). */
+  tools?: string;
+  /** Средства индивидуальной защиты. */
+  ppe?: string;
+  /** Требования по безопасности. */
+  safety?: string;
   source: SourceKind;
   note?: string;
   lockedByExpert?: boolean;

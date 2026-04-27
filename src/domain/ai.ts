@@ -84,6 +84,45 @@ export interface AiProvider {
       reason?: string;
     }>
   >;
+
+  /**
+   * Заполнение техкарты по шаблону Простоев.Нет (п.6.5 ТЗ). На основе
+   * модели, класса, подкласса и списка ВВ генерирует типовую техкарту:
+   * компонент → операция → ВВ → профессия → норма времени → ТМЦ.
+   *
+   * Колонки соответствуют «Шаблон ТехКарты.xlsx»: Элемент/Подэлемент,
+   * Наименование операции, Вид ТОиР, Норма времени, Количество
+   * исполнителей, Профессия/Квалификация, Трудоёмкость, ТМЦ/кол./ед.
+   */
+  fillTechCardByTemplate(input: {
+    model: Pick<EquipmentModel, 'className' | 'subclassName' | 'normalizedCode' | 'rawCode'>;
+    actions: Array<{ id: string; name: string; periodHours?: number }>;
+    /** Справочник операций — чтобы AI выбирал из них, а не выдумывал. */
+    operations?: string[];
+    /** Справочник специальностей с квалификациями. */
+    specialties?: Array<{ name: string; qualifications: string[] }>;
+  }): Promise<
+    Array<{
+      actionId?: string;
+      component?: string;
+      subcomponent?: string;
+      operation?: string;
+      workDescription?: string;
+      laborHours?: number;
+      workers?: number;
+      specialty?: string;
+      qualification?: string;
+      totalLaborHours?: number;
+      tmcName?: string;
+      tmcKind?: 'material' | 'spare';
+      tmcUnit?: string;
+      tmcQty?: number;
+      tools?: string;
+      ppe?: string;
+      safety?: string;
+      confidence?: number;
+    }>
+  >;
 }
 
 /** Локальная заглушка — ничего не возвращает. Не делает сетевых вызовов. */
@@ -101,6 +140,9 @@ export const noopAiProvider: AiProvider = {
     return [];
   },
   async enrichBomFromWeb() {
+    return [];
+  },
+  async fillTechCardByTemplate() {
     return [];
   },
 };

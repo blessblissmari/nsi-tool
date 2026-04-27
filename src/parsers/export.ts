@@ -4,6 +4,7 @@ import type {
   HierarchyNode,
   ActionItem,
   Characteristic,
+  TechCardRow,
 } from '../domain/types';
 
 /**
@@ -178,6 +179,66 @@ function classificationSheet(models: EquipmentModel[]): XLSX.WorkSheet {
   return XLSX.utils.aoa_to_sheet(aoa);
 }
 
+function techCardsSheet(models: EquipmentModel[]): XLSX.WorkSheet {
+  // Формат повторяет «Шаблон ТехКарты.xlsx» Простоев.Нет (п.6.5 ТЗ).
+  const aoa: (string | number | null)[][] = [
+    [
+      'Класс',
+      'Подкласс',
+      'Нормализованный код модели',
+      'Элемент',
+      'Подэлемент',
+      'Наименование операции',
+      'Краткое содержание работ',
+      'Вид ТОиР',
+      'Периодичность',
+      'Норма времени, часов',
+      'Количество исполнителей',
+      'Профессия/Квалификация',
+      'Трудоёмкость, человеко/часов',
+      'Наименование ТМЦ',
+      'Количество ТМЦ',
+      'Единицы измерения ТМЦ',
+      'Наименование инструменты',
+      'Средства индивидуальной защиты',
+      'Требования по безопасности',
+    ],
+  ];
+  for (const m of models) {
+    const rows: TechCardRow[] = m.techCard ?? [];
+    const acts = m.actions ?? [];
+    for (const r of rows) {
+      const act = r.actionId ? acts.find((a) => a.id === r.actionId) : undefined;
+      const prof =
+        r.specialty && r.qualification
+          ? `${r.specialty}, ${r.qualification}`
+          : (r.specialty ?? '');
+      aoa.push([
+        m.className ?? '',
+        m.subclassName ?? '',
+        m.normalizedCode ?? m.rawCode ?? '',
+        r.component ?? '',
+        r.subcomponent ?? '',
+        r.operation ?? '',
+        r.workDescription ?? '',
+        act?.name ?? '',
+        act?.periodHours ?? '',
+        r.laborHours ?? '',
+        r.workers ?? '',
+        prof,
+        r.totalLaborHours ?? '',
+        r.tmcName ?? '',
+        r.tmcQty ?? '',
+        r.tmcUnit ?? '',
+        r.tools ?? '',
+        r.ppe ?? '',
+        r.safety ?? '',
+      ]);
+    }
+  }
+  return XLSX.utils.aoa_to_sheet(aoa);
+}
+
 export function exportWorkbook(
   hierarchy: HierarchyNode,
   models: EquipmentModel[],
@@ -191,6 +252,7 @@ export function exportWorkbook(
   );
   XLSX.utils.book_append_sheet(wb, charsSheet(models), 'Характеристики');
   XLSX.utils.book_append_sheet(wb, actionsSheet(models), 'ВВ');
+  XLSX.utils.book_append_sheet(wb, techCardsSheet(models), 'Техкарты');
   const out = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
   return new Blob([out], {
     type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',

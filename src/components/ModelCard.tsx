@@ -211,6 +211,8 @@ export function ModelCard({ modelId }: { modelId: string }) {
     const refs = useStore((s) => s.references);
     const upsert = useStore((s) => s.upsertTechCardRow);
     const del = useStore((s) => s.deleteTechCardRow);
+    const [aiBusy, setAiBusy] = useState(false);
+    const [aiErr, setAiErr] = useState('');
     if (!m) return null;
     const rows = m.techCard ?? [];
     const tmcKindLabel = (k?: 'material' | 'spare') =>
@@ -218,6 +220,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
     const ops = refs.operations;
     const specs = refs.specialties;
     const acts = m.actions ?? [];
+    const hasKey = !!getApiKey();
 
     const addBlankRow = () =>
       upsert(modelId, {
@@ -234,6 +237,72 @@ export function ModelCard({ modelId }: { modelId: string }) {
         source: 'manual',
       });
 
+    const fillByAi = async () => {
+      if (aiBusy) return;
+      if (!hasKey) {
+        setAiErr('Укажите OpenAI ключ в «Настройках».');
+        return;
+      }
+      if (acts.length === 0) {
+        setAiErr('Нет ВВ — добавьте хотя бы одно ВВ (вкладка «ВВ»).');
+        return;
+      }
+      setAiBusy(true);
+      setAiErr('');
+      try {
+        const result = await aiProvider().fillTechCardByTemplate({
+          model: {
+            className: m.className,
+            subclassName: m.subclassName,
+            normalizedCode: m.normalizedCode,
+            rawCode: m.rawCode,
+          },
+          actions: acts.map((a) => ({
+            id: a.id,
+            name: a.name,
+            periodHours: a.periodHours,
+          })),
+          operations: ops.map((o) => o.name),
+          specialties: specs.map((s) => ({
+            name: s.name,
+            qualifications: s.qualifications,
+          })),
+        });
+        if (result.length === 0) {
+          setAiErr(
+            'ИИ вернул пустую техкарту. Проверьте, что класс/подкласс заполнены; попробуйте «Очистить кэш ИИ» в «Настройках» и повторите.',
+          );
+          return;
+        }
+        for (const r of result) {
+          upsert(modelId, {
+            component: r.component,
+            subcomponent: r.subcomponent,
+            operation: r.operation,
+            workDescription: r.workDescription,
+            actionId: r.actionId,
+            laborHours: r.laborHours,
+            workers: r.workers,
+            specialty: r.specialty,
+            qualification: r.qualification,
+            totalLaborHours: r.totalLaborHours,
+            tmcName: r.tmcName,
+            tmcKind: r.tmcKind,
+            tmcUnit: r.tmcUnit,
+            tmcQty: r.tmcQty,
+            tools: r.tools,
+            ppe: r.ppe,
+            safety: r.safety,
+            source: 'ai',
+          });
+        }
+      } catch (e) {
+        setAiErr('Ошибка ИИ: ' + (e instanceof Error ? e.message : String(e)));
+      } finally {
+        setAiBusy(false);
+      }
+    };
+
     return (
       <div>
         <div
@@ -242,9 +311,23 @@ export function ModelCard({ modelId }: { modelId: string }) {
             gap: 8,
             alignItems: 'center',
             marginBottom: 6,
+            flexWrap: 'wrap',
           }}
         >
           <button onClick={addBlankRow}>+ строка</button>
+          <button
+            onClick={fillByAi}
+            disabled={aiBusy || !hasKey || acts.length === 0}
+            title={
+              !hasKey
+                ? 'Укажите OpenAI ключ в «Настройках».'
+                : acts.length === 0
+                  ? 'Добавьте хотя бы одно ВВ перед заполнением ИИ.'
+                  : 'Сгенерировать техкарту по шаблону Простоев.Нет на основе класса/подкласса и списка ВВ.'
+            }
+          >
+            {aiBusy ? '…ИИ работает' : '⚡ Заполнить ИИ'}
+          </button>
           <button
             onClick={toggleFullscreen}
             title={
@@ -262,6 +345,11 @@ export function ModelCard({ modelId }: { modelId: string }) {
               <> · загрузите «Справочник операций.xlsx» для autocomplete</>
             )}
           </span>
+          {aiErr && (
+            <span className="small" style={{ color: 'crimson' }}>
+              {aiErr}
+            </span>
+          )}
         </div>
         <div style={{ overflowX: 'auto' }}>
           <table className="models">
