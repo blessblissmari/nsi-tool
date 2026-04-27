@@ -37,14 +37,17 @@ const UNITS: UnitDef[] = [
     group: 'rpm',
     factor: 1,
   },
-  // Размеры
-  { canonical: 'мм', aliases: ['мм', 'mm'], group: 'len', factor: 1 },
-  { canonical: 'мм', aliases: ['см', 'cm'], group: 'len', factor: 10 },
-  { canonical: 'мм', aliases: ['м', 'm'], group: 'len', factor: 1000 },
-  // Масса
-  { canonical: 'кг', aliases: ['кг', 'kg'], group: 'mass', factor: 1 },
-  { canonical: 'кг', aliases: ['г', 'g'], group: 'mass', factor: 0.001 },
-  { canonical: 'кг', aliases: ['т', 't'], group: 'mass', factor: 1000 },
+  // Размеры — каждая единица сохраняется как есть; перевод выполняется
+  // отдельной функцией convertLength при сравнении (см. convert.ts).
+  // Раньше «50 м» канонизировалось в «50000 мм», что путало пользователя
+  // в колонке «норм.» и в карточке (Напор: 50 м показывался как 50000).
+  { canonical: 'мм', aliases: ['мм', 'mm'], group: 'len_mm', factor: 1 },
+  { canonical: 'см', aliases: ['см', 'cm'], group: 'len_cm', factor: 1 },
+  { canonical: 'м', aliases: ['м', 'm'], group: 'len_m', factor: 1 },
+  // Масса — также сохраняем «как есть» (кг/г/т — разные группы).
+  { canonical: 'кг', aliases: ['кг', 'kg'], group: 'mass_kg', factor: 1 },
+  { canonical: 'г', aliases: ['г', 'g'], group: 'mass_g', factor: 1 },
+  { canonical: 'т', aliases: ['т', 't'], group: 'mass_t', factor: 1 },
   // Температура (без конвертации, только канон)
   { canonical: '°C', aliases: ['°c', 'c', 'град', 'градc'], group: 'temp', factor: 1 },
   { canonical: 'K', aliases: ['k'], group: 'temp_k', factor: 1 },
