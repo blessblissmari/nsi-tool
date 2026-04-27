@@ -107,38 +107,38 @@ function Inner({
     <div className="app">
       <header className="app-head">
         <span className="brand">НСИ</span>
-        <span className="hint">
-          Иерархия · ТОР · Нормализация (п.8.3) · Документы · Характеристики
-        </span>
         <span className="spacer" />
         <span className="stats">
-          Моделей: {stats.total} · Нормализовано: {stats.norm} · ТОР: {stats.tor}{' '}
-          · Без класса: {stats.unresolved}
-          {stats.total > 0 && (
+          {stats.total > 0 ? (
             <>
-              {' · '}
-              <span
-                title="п.7 ТЗ — оценка качества: средняя полнота приоритетных характеристик по моделям с классом"
-              >
-                Полнота хар-к: {Math.round(stats.completeness * 100)}%
-              </span>
-              {' · '}
-              <span title="п.7 ТЗ — итоговая оценка проверки человеком">
-                Проверено: {stats.expertOk}/{stats.total}
-              </span>
+              Моделей {stats.total} · ТОР {stats.tor}
+              {stats.unresolved > 0 && <> · без класса {stats.unresolved}</>}
+              {stats.total > 0 && (
+                <>
+                  {' · '}
+                  <span title="п.7 ТЗ — средняя полнота приоритетных характеристик">
+                    хар-к {Math.round(stats.completeness * 100)}%
+                  </span>
+                  {' · '}
+                  <span title="п.7 ТЗ — доля моделей, проверенных экспертом">
+                    проверено {stats.expertOk}/{stats.total}
+                  </span>
+                </>
+              )}
             </>
+          ) : (
+            <span className="muted">Нет данных — нажмите «Загрузить»</span>
           )}
         </span>
         <button
           onClick={() => setShowSettings(true)}
           title={
             hasKey
-              ? `Настройки · ИИ ${usage.requests} запросов · $${usage.costUsd.toFixed(4)}`
-              : 'Настройки (картинки, ИИ-ключ и т.п.)'
+              ? `ИИ ${usage.requests} запросов · $${usage.costUsd.toFixed(4)}`
+              : 'Настройки (ИИ-ключ, картинки, сброс демо)'
           }
-          style={{ marginLeft: 12 }}
         >
-          Настройки {hasKey ? `· ИИ $${usage.costUsd.toFixed(4)}` : '· ИИ выкл'}
+          Настройки{hasKey ? ` · ИИ $${usage.costUsd.toFixed(4)}` : ''}
         </button>
       </header>
       <Toolbar />

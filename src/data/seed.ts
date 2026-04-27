@@ -2,19 +2,30 @@ import type {
   Classifier,
   EquipmentModel,
   HierarchyNode,
+  NodeType,
   NormalizationRules,
 } from '../domain/types';
+import { normalizeModelCode } from '../domain/normalize';
+import {
+  PROSTOEV_CLASSIFIER,
+  SEVERAL_HIERARCHY_ROWS,
+  SEVERAL_CLASSIFICATION,
+} from './prostoev';
 
 /**
- * Классификатор «Простоев.Нет» по умолчанию — минимальный набор классов
- * промышленного оборудования с приоритетными характеристиками и ключевыми
- * словами для автоклассификации (п.6.1 ТЗ: «По умолчанию в инструменте
- * загружен и используется Классификатор и Правила нормализации Простоев.Нет»).
+ * Классификатор «Простоев.Нет» по умолчанию — полный справочник из
+ * «Классификатор.xlsx» (12 классов, 20 подклассов, приоритетные
+ * характеристики). Ключевые слова к классам/подклассам добавлены
+ * автоматически на основе названия.
  *
  * Пользователь может перезаписать его, загрузив свой xlsx через
  * «Загрузить» — autoImport заменит список classes целиком.
  */
-export const SEED_CLASSIFIER: Classifier = {
+export const SEED_CLASSIFIER: Classifier = PROSTOEV_CLASSIFIER;
+
+/** Внутренний (на время миграции) — старый минимальный демо-классификатор,
+ *  не используется как default, но оставлен как пример. */
+const _LEGACY_SEED: Classifier = {
   classes: [
     {
       name: 'Насосы',
@@ -203,20 +214,111 @@ export const SEED_NORMALIZATION_RULES: NormalizationRules = {
 };
 
 /**
- * По умолчанию иерархия пустая — пользователь загружает её из xlsx.
- * Корень — единственный узел с подсказкой; модели появляются после загрузки.
+ * Seed — демо-иерархия «Северал» из бандлированного «Иерархия с моделями.xlsx»
+ * (предприятие → ВС → цех → участок → линия → агрегат → ТОР; 7 уровней, 29 моделей).
+ * Модели сразу нормализованы по п.8.3 ТЗ и прокласифицированы по привязкам
+ * из «Классификация моделей.xlsx».
+ *
+ * Если пользователь загрузит свой xlsx через «Загрузить», `setHierarchy`
+ * в сторе заменит всё целиком.
  */
+const LEVEL_TYPE: NodeType[] = [
+  'enterprise',
+  'plant',
+  'workshop',
+  'site',
+  'group',
+  'group',
+  'group',
+];
+
+const LEVEL_LABEL: string[] = [
+  'Предприятие',
+  'Подразделение',
+  'Цех',
+  'Участок',
+  'Линия',
+  'Агрегат',
+  'Узел',
+];
+
+let seedCounter = 0;
+const seedId = (p: string) =>
+  `seed-${p}-${++seedCounter}`;
+
 export function buildSeedHierarchy(): {
   hierarchy: HierarchyNode;
   models: EquipmentModel[];
 } {
-  const hierarchy: HierarchyNode = {
-    id: 'root',
+  const classByCode = new Map<
+    string,
+    { className: string; subclassName?: string }
+  >();
+  for (const c of SEVERAL_CLASSIFICATION) {
+    classByCode.set(c.model, {
+      className: c.class,
+      subclassName: c.subclass || undefined,
+    });
+  }
+
+  const root: HierarchyNode = {
+    id: seedId('root'),
     type: 'enterprise',
-    name: 'Иерархия',
-    description:
-      'Нажмите «Загрузить» и выберите файлы (иерархия, классификатор, сопоставления, ВВ). Тип определяется автоматически по колонкам.',
+    name: '',
+    levelLabel: LEVEL_LABEL[0],
     children: [],
   };
-  return { hierarchy, models: [] };
+
+  // ключ для дедупликации узла по пути
+  const cache = new Map<string, HierarchyNode>();
+  const models: EquipmentModel[] = [];
+
+  for (const row of SEVERAL_HIERARCHY_ROWS) {
+    const path = row.path.filter((x) => x && x.trim());
+    if (!path.length && !row.model) continue;
+
+    // Корень — первый уровень. Если ещё не задан — берём имя из первой строки.
+    if (path.length > 0 && !root.name) {
+      root.name = path[0];
+    }
+
+    let parent = root;
+    for (let i = 1; i < path.length; i++) {
+      const segKey = path.slice(0, i + 1).join('\u0001');
+      let node = cache.get(segKey);
+      if (!node) {
+        node = {
+          id: seedId('n'),
+          type: LEVEL_TYPE[i] ?? 'group',
+          name: path[i],
+          levelLabel: LEVEL_LABEL[i] ?? `Уровень ${i + 1}`,
+          children: [],
+        };
+        parent.children.push(node);
+        cache.set(segKey, node);
+      }
+      parent = node;
+    }
+
+    if (row.model) {
+      const norm = normalizeModelCode(row.model);
+      const cls = classByCode.get(norm.code);
+      const m: EquipmentModel = {
+        id: seedId('m'),
+        nodeId: parent.id,
+        rawCode: row.model,
+        normalizedCode: norm.code,
+        className: cls?.className,
+        subclassName: cls?.subclassName,
+        classificationSource: cls ? 'classifier' : undefined,
+        classificationConfidence: cls ? 1 : undefined,
+      };
+      parent.modelIds = (parent.modelIds ?? []).concat(m.id);
+      models.push(m);
+    }
+  }
+
+  return { hierarchy: root, models };
 }
+
+export const LEGACY_MINIMAL_CLASSIFIER: Classifier = _LEGACY_SEED;

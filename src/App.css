@@ -190,29 +190,24 @@ select:focus {
   padding: 0 5px;
   border-radius: 8px;
 }
-.t-enterprise {
-  border-color: #c5d8f5 !important;
-  color: #1f6feb !important;
+/* Тип узла — единый нейтральный стиль, без радуги (п. «минимум украшений»). */
+.tree .type {
+  font-size: 10px;
+  color: var(--fg-dim);
+  border-color: transparent;
+  background: transparent;
+  padding: 0 4px 0 0;
+  text-transform: none;
 }
-.t-plant {
-  border-color: #c5e1c5 !important;
-  color: #167c3f !important;
-}
-.t-workshop {
-  border-color: #e2cfae !important;
-  color: #8a5a00 !important;
-}
-.t-site {
-  border-color: #ddd1ee !important;
-  color: #6831b4 !important;
-}
-.t-group {
-  border-color: #f1c8d3 !important;
-  color: #a51a4f !important;
-}
+.t-enterprise,
+.t-plant,
+.t-workshop,
+.t-site,
+.t-group,
 .t-equipment {
-  border-color: #c1d3d8 !important;
-  color: #2b6e7c !important;
+  color: var(--fg-dim) !important;
+  border-color: transparent !important;
+  background: transparent !important;
 }
 
 /* Panel */

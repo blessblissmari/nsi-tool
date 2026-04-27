@@ -20,6 +20,7 @@ import {
   SEED_NORMALIZATION_RULES,
   buildSeedHierarchy,
 } from './data/seed';
+import { PROSTOEV_CLASSIFIER } from './data/prostoev';
 
 interface Store {
   hierarchy: HierarchyNode;
@@ -34,6 +35,10 @@ interface Store {
   setHierarchy(h: HierarchyNode, models: EquipmentModel[]): void;
   setClassifier(c: Classifier): void;
   setRules(r: NormalizationRules): void;
+  /** Перезагрузить встроенную демо-иерархию «Северал» + классификатор Простоев.Нет. */
+  resetToSeed(): void;
+  /** Полностью очистить иерархию и модели (оставить только корень). */
+  clearAll(): void;
   selectNode(id: string | undefined): void;
   selectModel(id: string | undefined): void;
   toggleExpand(id: string): void;
@@ -96,6 +101,16 @@ interface Store {
 
 const seed = buildSeedHierarchy();
 
+function seedInitialExpanded(h: HierarchyNode): Set<string> {
+  // Разворачиваем первые два уровня — чтобы инженер сразу видел структуру.
+  const ids = new Set<string>([h.id]);
+  for (const c of h.children) {
+    ids.add(c.id);
+    for (const c2 of c.children) ids.add(c2.id);
+  }
+  return ids;
+}
+
 export const useStore = create<Store>()(
   persist(
     (set, get) => ({
@@ -106,7 +121,7 @@ export const useStore = create<Store>()(
   references: { actions: [], operations: [], specialties: [], units: [] },
   selectedNodeId: seed.hierarchy.id,
   selectedModelId: undefined,
-  expandedIds: new Set([seed.hierarchy.id]),
+  expandedIds: seedInitialExpanded(seed.hierarchy),
 
   setHierarchy(h, models) {
     set({
@@ -122,6 +137,34 @@ export const useStore = create<Store>()(
   },
   setRules(r) {
     set({ rules: r });
+  },
+  resetToSeed() {
+    const s = buildSeedHierarchy();
+    set({
+      hierarchy: s.hierarchy,
+      models: s.models,
+      classifier: PROSTOEV_CLASSIFIER,
+      rules: SEED_NORMALIZATION_RULES,
+      selectedNodeId: s.hierarchy.id,
+      selectedModelId: undefined,
+      expandedIds: seedInitialExpanded(s.hierarchy),
+    });
+  },
+  clearAll() {
+    const root: HierarchyNode = {
+      id: 'root-empty',
+      type: 'enterprise',
+      name: 'Иерархия',
+      levelLabel: 'Предприятие',
+      children: [],
+    };
+    set({
+      hierarchy: root,
+      models: [],
+      selectedNodeId: root.id,
+      selectedModelId: undefined,
+      expandedIds: new Set([root.id]),
+    });
   },
   selectNode(id) {
     set({ selectedNodeId: id, selectedModelId: undefined });
@@ -532,17 +575,36 @@ export const useStore = create<Store>()(
     }),
     {
       name: 'nsi_store_v1',
-      version: 2,
+      version: 3,
       // v1→v2: подсыпаем дефолтный классификатор «Простоев.Нет», если в
-      // сохранённом стейте классификатор пуст. Пользовательские классификаторы
+      // сохранённом стейте классификатор пуст.
+      // v2→v3: если иерархия пустая (был пустой seed) — подсыпаем демо-иерархию
+      // «Северал» из бандлированного xlsx, чтобы инженер сразу видел
+      // работу иерархии/ТОР. Пользовательские иерархии/классификаторы
       // не трогаем.
       migrate: (persisted: unknown) => {
         const ps = (persisted ?? {}) as Partial<Store>;
         const cls = ps.classifier;
+        let next = ps;
         if (!cls || !cls.classes || cls.classes.length === 0) {
-          return { ...ps, classifier: SEED_CLASSIFIER } as Partial<Store>;
+          next = { ...next, classifier: SEED_CLASSIFIER };
+        } else if (cls.classes.length < PROSTOEV_CLASSIFIER.classes.length) {
+          // Старый минимальный seed → заменить на полный Простоев.Нет.
+          next = { ...next, classifier: SEED_CLASSIFIER };
         }
-        return ps as Partial<Store>;
+        const h = next.hierarchy;
+        const hasAny =
+          h && ((h.children?.length ?? 0) > 0 || (h.modelIds?.length ?? 0) > 0);
+        if (!hasAny) {
+          const seeded = buildSeedHierarchy();
+          next = {
+            ...next,
+            hierarchy: seeded.hierarchy,
+            models: seeded.models,
+            expandedIds: new Set([seeded.hierarchy.id]),
+          };
+        }
+        return next as Partial<Store>;
       },
       storage: createJSONStorage(() => localStorage, {
         // Сериализуем Set как массив, чтобы JSON корректно его сохранял.

@@ -195,6 +195,34 @@ export function Toolbar() {
       <button onClick={expandAll} title="Развернуть всё дерево">Развернуть</button>
       <button onClick={collapseAll} title="Свернуть дерево">Свернуть</button>
 
+      <span className="sep" />
+      <button
+        title="Перезагрузить встроенные демо-данные (иерархия «Северал», классификатор «Простоев.Нет»). Затрёт текущие данные."
+        onClick={() => {
+          if (
+            confirm(
+              'Перезагрузить демо-данные? Текущая иерархия и модели будут заменены на встроенный пример «Северал».',
+            )
+          ) {
+            useStore.getState().resetToSeed();
+            setMsg('Демо-данные восстановлены.');
+          }
+        }}
+      >
+        Сбросить демо
+      </button>
+      <button
+        title="Очистить иерархию и модели (оставить только пустой корень)."
+        onClick={() => {
+          if (confirm('Очистить иерархию и удалить все модели? Действие необратимо.')) {
+            useStore.getState().clearAll();
+            setMsg('Иерархия очищена.');
+          }
+        }}
+      >
+        Очистить
+      </button>
+
       <span className="status">{msg}</span>
     </div>
   );
