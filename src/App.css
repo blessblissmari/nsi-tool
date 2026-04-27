@@ -506,10 +506,16 @@ select:focus {
   padding: 8px 12px 24px;
 }
 
-/* Картинка модели в шапке карточки. */
-.model-card .model-thumb {
-  width: 28px;
-  height: 28px;
+/* Картинка модели в шапке карточки и в таблице моделей. */
+.model-thumb {
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  min-height: 24px;
+  max-width: 24px;
+  max-height: 24px;
+  display: inline-block;
+  vertical-align: middle;
   object-fit: cover;
   border: 1px solid var(--border);
   background: var(--bg-alt);
@@ -517,8 +523,12 @@ select:focus {
 
 /* Превью картинки в свойствах. */
 .model-image-box {
-  width: 140px;
-  height: 100px;
+  width: 96px;
+  height: 64px;
+  min-width: 96px;
+  min-height: 64px;
+  max-width: 96px;
+  max-height: 64px;
   border: 1px solid var(--border);
   background: var(--bg-alt);
   display: flex;

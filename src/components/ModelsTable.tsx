@@ -28,7 +28,7 @@ export function ModelsTable({
       <table className="models">
         <thead>
           <tr>
-            {showImg && <th style={{ width: 36 }}></th>}
+            {showImg && <th style={{ width: 28 }}></th>}
             <th style={{ width: 280 }}>Код модели</th>
             <th style={{ width: 200 }}>Класс</th>
             <th style={{ width: 220 }}>Подкласс</th>
@@ -48,7 +48,7 @@ export function ModelsTable({
               >
                 {showImg && (
                   <td>
-                    {m.imageUrl ? (
+                    {m.imageUrl && (
                       <img
                         src={m.imageUrl}
                         alt=""
@@ -58,8 +58,6 @@ export function ModelsTable({
                             'none';
                         }}
                       />
-                    ) : (
-                      <span className="muted small">—</span>
                     )}
                   </td>
                 )}

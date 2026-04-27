@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { persist, createJSONStorage } from 'zustand/middleware';
 import type {
   Classifier,
   EquipmentModel,
@@ -95,7 +96,9 @@ interface Store {
 
 const seed = buildSeedHierarchy();
 
-export const useStore = create<Store>((set, get) => ({
+export const useStore = create<Store>()(
+  persist(
+    (set, get) => ({
   hierarchy: seed.hierarchy,
   models: seed.models,
   classifier: SEED_CLASSIFIER,
@@ -523,7 +526,36 @@ export const useStore = create<Store>((set, get) => ({
     );
     set({ models: next });
   },
-}));
+    }),
+    {
+      name: 'nsi_store_v1',
+      version: 1,
+      storage: createJSONStorage(() => localStorage, {
+        // Сериализуем Set как массив, чтобы JSON корректно его сохранял.
+        replacer: (_k, v) => (v instanceof Set ? { __set: Array.from(v) } : v),
+        reviver: (_k, v) => {
+          if (
+            v &&
+            typeof v === 'object' &&
+            Array.isArray((v as { __set?: unknown[] }).__set)
+          ) {
+            return new Set((v as { __set: string[] }).__set);
+          }
+          return v;
+        },
+      }),
+      // Не сохраняем выбор узла/модели — эфемерный UI-стейт.
+      partialize: (s) => ({
+        hierarchy: s.hierarchy,
+        models: s.models,
+        classifier: s.classifier,
+        rules: s.rules,
+        references: s.references,
+        expandedIds: s.expandedIds,
+      }),
+    },
+  ),
+);
 
 function canon(s: string): string {
   return String(s ?? '')

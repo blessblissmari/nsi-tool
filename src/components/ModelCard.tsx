@@ -990,13 +990,11 @@ export function ModelCard({ modelId }: { modelId: string }) {
           Картинка модели (URL или файл, опционально)
         </div>
         <div className="row-flex" style={{ gap: 6, alignItems: 'flex-start' }}>
-          <div className="model-image-box">
-            {m.imageUrl ? (
+          {m.imageUrl && (
+            <div className="model-image-box">
               <img src={m.imageUrl} alt="" />
-            ) : (
-              <span className="muted small">нет картинки</span>
-            )}
-          </div>
+            </div>
+          )}
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 4 }}>
             <input
               placeholder="https://... или data:image/..."
