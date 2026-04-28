@@ -219,8 +219,21 @@ export function ModelCard({ modelId }: { modelId: string }) {
     const setTechCard = useStore((s) => s.setTechCard);
     const [aiBusy, setAiBusy] = useState(false);
     const [aiErr, setAiErr] = useState('');
+    /**
+     * Фильтр по виду воздействия (ВВ): техкарта подстраивается под выбранный
+     * вид (например, «только ТО-1»). По умолчанию — все ВВ.
+     * Спец-значения: '' = все · '__none__' = строки без привязки к ВВ.
+     * Не мутирует store — это только UI-фильтр (созвон 28.04.2026: «только то1»).
+     */
+    const [actionFilter, setActionFilter] = useState<string>('');
     if (!m) return null;
-    const rows = m.techCard ?? [];
+    const allRows = m.techCard ?? [];
+    const rows =
+      actionFilter === ''
+        ? allRows
+        : actionFilter === '__none__'
+          ? allRows.filter((r) => !r.actionId)
+          : allRows.filter((r) => r.actionId === actionFilter);
     const ops = refs.operations;
     const specs = refs.specialties;
     const acts = m.actions ?? [];
@@ -324,12 +337,16 @@ export function ModelCard({ modelId }: { modelId: string }) {
       return words.join(' ');
     };
 
+    // При активном фильтре по ВВ новая строка сразу получает этот actionId,
+    // чтобы она осталась видимой в текущем виде («техкарта подстраивается под вид»).
+    const filterActionId =
+      actionFilter && actionFilter !== '__none__' ? actionFilter : undefined;
     const addBlankRow = () =>
       upsert(modelId, {
         component: '',
         subcomponent: '',
         operation: '',
-        actionId: undefined,
+        actionId: filterActionId,
         specialty: '',
         qualification: '',
         laborHours: undefined,
@@ -346,10 +363,11 @@ export function ModelCard({ modelId }: { modelId: string }) {
         component: '',
         subcomponent: '',
         operation: '',
+        actionId: filterActionId,
         source: 'manual',
       });
     const sortByElement = () => {
-      const sorted = [...rows].sort((a, b) => {
+      const sorted = [...allRows].sort((a, b) => {
         const ea = (a.isAggregate ? '\uffff' : (a.component ?? '')).toLocaleLowerCase('ru');
         const eb = (b.isAggregate ? '\uffff' : (b.component ?? '')).toLocaleLowerCase('ru');
         if (ea !== eb) return ea.localeCompare(eb, 'ru');
@@ -362,8 +380,8 @@ export function ModelCard({ modelId }: { modelId: string }) {
     };
     const dedupeRows = () => {
       const seen = new Set<string>();
-      const out: typeof rows = [];
-      for (const r of rows) {
+      const out: typeof allRows = [];
+      for (const r of allRows) {
         const key = [
           r.isAggregate ? 'AGG' : (r.component ?? '').trim().toLowerCase(),
           (r.subcomponent ?? '').trim().toLowerCase(),
@@ -377,7 +395,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
         seen.add(key);
         out.push(r);
       }
-      const removed = rows.length - out.length;
+      const removed = allRows.length - out.length;
       setTechCard(modelId, out);
       setAiErr(removed > 0 ? `Удалено дублей: ${removed}.` : 'Дублей не найдено.');
     };
@@ -393,7 +411,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
     const normalizeAllRows = () => {
       let touched = 0;
       const warns: string[] = [];
-      for (const r of rows) {
+      for (const r of allRows) {
         const elem = r.component ? normElement(r.component) : { text: '', warnings: [] };
         const sub = r.subcomponent ? normElement(r.subcomponent) : { text: '', warnings: [] };
         const newOp = r.operation ? normOperation(r.operation) : r.operation;
@@ -610,6 +628,23 @@ export function ModelCard({ modelId }: { modelId: string }) {
             flexWrap: 'wrap',
           }}
         >
+          <label className="muted small" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            ВВ:
+            <select
+              value={actionFilter}
+              onChange={(e) => setActionFilter(e.target.value)}
+              title="Показать только строки выбранного вида воздействия. Техкарта подстраивается под выбранный вид (например, «только ТО-1»)."
+            >
+              <option value="">все</option>
+              {acts.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name}
+                  {a.periodHours ? ` · ${a.periodHours} ч` : ''}
+                </option>
+              ))}
+              <option value="__none__">— без привязки —</option>
+            </select>
+          </label>
           <button onClick={addBlankRow}>+ строка</button>
           <button
             onClick={addAggregateRow}
@@ -690,7 +725,10 @@ export function ModelCard({ modelId }: { modelId: string }) {
             {fullscreen ? '⤤ К дереву' : '⛶ На весь экран'}
           </button>
           <span className="muted small">
-            {rows.length} строк{ops.length ? ` · справочник операций: ${ops.length}` : ''}
+            {actionFilter
+              ? `${rows.length} из ${allRows.length}`
+              : `${rows.length}`} строк
+            {ops.length ? ` · справочник операций: ${ops.length}` : ''}
             {specs.length ? ` · специальностей: ${specs.length}` : ''}
             {!ops.length && (
               <> · загрузите «Справочник операций.xlsx» для autocomplete</>
