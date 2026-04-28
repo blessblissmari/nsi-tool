@@ -1,18 +1,27 @@
 /* Минималистичный инженерный UI: плотные таблицы, тонкие линии, без украшений. */
 
 :root {
-  --bg: #ffffff;
-  --bg-alt: #f6f7f8;
-  --bg-dim: #eef0f2;
-  --fg: #1a1a1a;
-  --fg-dim: #5a6168;
-  --border: #d6d9dc;
-  --border-strong: #b9bdc1;
-  --accent: #1f6feb;
-  --accent-bg: #e6efff;
-  --ok: #167c3f;
-  --warn: #a25b00;
+  /* Инженерная палитра: светлый фон с холодным синеватым подтоном,
+     индиго-акцент. Цвета приглушённые — ничего не отвлекает от данных. */
+  --bg: #fbfcfe;
+  --bg-alt: #f1f4f9;
+  --bg-dim: #e6ebf3;
+  --fg: #1c2330;
+  --fg-dim: #5a6478;
+  --border: #d4dae5;
+  --border-strong: #b3bbcc;
+  --accent: #3a5cd9;
+  --accent-2: #6b88ee;
+  --accent-bg: #e8efff;
+  --accent-glow: rgba(58, 92, 217, 0.18);
+  --ok: #1f7a47;
+  --ok-bg: #e0f3e8;
+  --warn: #b8631a;
+  --warn-bg: #fbecda;
   --danger: #b3261e;
+  --danger-bg: #fbe5e3;
+  --shadow-sm: 0 1px 2px rgba(28, 35, 48, 0.04);
+  --shadow-md: 0 2px 6px rgba(28, 35, 48, 0.06);
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
@@ -34,18 +43,53 @@ body {
 
 button {
   font: inherit;
-  background: var(--bg-alt);
+  /* Мягкий вертикальный градиент, как на инженерных пультах. */
+  background: linear-gradient(180deg, #ffffff 0%, var(--bg-alt) 100%);
   border: 1px solid var(--border);
-  padding: 3px 8px;
+  padding: 3px 9px;
   cursor: pointer;
-  border-radius: 2px;
+  border-radius: 4px;
+  color: var(--fg);
+  box-shadow: var(--shadow-sm);
+  transition: background 120ms ease, box-shadow 120ms ease,
+    border-color 120ms ease, transform 60ms ease;
 }
-button:hover {
+button:hover:not(:disabled) {
+  background: linear-gradient(180deg, #f6f9ff 0%, var(--bg-dim) 100%);
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-md), 0 0 0 2px var(--accent-glow);
+}
+button:active:not(:disabled) {
   background: var(--bg-dim);
+  transform: translateY(0.5px);
+  box-shadow: inset 0 1px 1px rgba(28, 35, 48, 0.08);
+}
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+/* Акцентная кнопка-первичка — для главных действий (Завершить и т.п.). */
+button.primary,
+button[data-primary] {
+  background: linear-gradient(180deg, var(--accent-2) 0%, var(--accent) 100%);
+  color: #fff;
+  border-color: var(--accent);
+  box-shadow: 0 1px 2px var(--accent-glow);
+}
+button.primary:hover:not(:disabled),
+button[data-primary]:hover:not(:disabled) {
+  background: linear-gradient(180deg, #8aa3f3 0%, #4d6cdf 100%);
+  box-shadow: 0 2px 6px var(--accent-glow), 0 0 0 3px var(--accent-glow);
 }
 button.danger {
   color: var(--danger);
   border-color: #e0bcb9;
+  background: linear-gradient(180deg, #ffffff 0%, var(--danger-bg) 100%);
+}
+button.danger:hover:not(:disabled) {
+  background: linear-gradient(180deg, var(--danger-bg) 0%, #f8d7d3 100%);
+  box-shadow: var(--shadow-md), 0 0 0 2px rgba(179, 38, 30, 0.14);
 }
 input,
 select,
@@ -53,15 +97,23 @@ textarea {
   font: inherit;
   font-size: 12.5px;
   border: 1px solid var(--border);
-  padding: 2px 5px;
-  border-radius: 2px;
+  padding: 2px 6px;
+  border-radius: 3px;
   background: #fff;
+  color: var(--fg);
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+input:hover:not(:disabled),
+select:hover:not(:disabled),
+textarea:hover:not(:disabled) {
+  border-color: var(--border-strong);
 }
 input:focus,
 textarea:focus,
 select:focus {
-  outline: 1px solid var(--accent);
-  outline-offset: 0;
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-glow);
 }
 .mono {
   font-family: var(--mono);
@@ -86,14 +138,21 @@ select:focus {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 4px 10px;
-  background: var(--bg-alt);
+  padding: 6px 12px;
+  background: linear-gradient(180deg, #ffffff 0%, var(--bg-alt) 100%);
   border-bottom: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-sm);
   flex: 0 0 auto;
   font-size: 12px;
 }
 .app-head .brand {
-  font-weight: 600;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  /* Акцентный градиентный текст, чтобы было «дружелюбно». */
+  background: linear-gradient(135deg, var(--accent) 0%, #6b88ee 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
 }
 .app-head .hint {
   color: var(--fg-dim);
@@ -139,7 +198,11 @@ select:focus {
 .right {
   flex: 1;
   overflow: auto;
-  background: var(--bg-alt);
+  /* Очень лёгкая «инженерная» сетка фона. Не отвлекает, но добавляет
+     ощущение технической работы. */
+  background:
+    linear-gradient(180deg, var(--bg) 0%, var(--bg-alt) 220px),
+    radial-gradient(circle at 20% 0, rgba(58, 92, 217, 0.04) 0, transparent 60%);
 }
 
 /* Tree */
@@ -272,8 +335,10 @@ select:focus {
 .card {
   background: var(--bg);
   border: 1px solid var(--border);
+  border-radius: 6px;
   margin-bottom: 8px;
   padding: 8px 10px;
+  box-shadow: var(--shadow-sm);
 }
 .card h3 {
   margin: 0 0 6px;
@@ -363,18 +428,19 @@ select:focus {
 .badge {
   display: inline-block;
   font-size: 10px;
-  padding: 1px 6px;
-  border-radius: 2px;
+  padding: 1px 7px;
+  border-radius: 10px;
   letter-spacing: 0.03em;
   text-transform: uppercase;
+  font-weight: 600;
 }
 .badge.ok {
-  background: #e3f4ea;
+  background: var(--ok-bg);
   color: var(--ok);
   border: 1px solid #b8dcc4;
 }
 .badge.warn {
-  background: #faf1e0;
+  background: var(--warn-bg);
   color: var(--warn);
   border: 1px solid #e2c895;
 }
@@ -407,25 +473,32 @@ select:focus {
   border-bottom: 1px solid var(--border-strong);
   margin: 0 -10px 8px;
   padding: 0 6px;
-  background: var(--bg-alt);
+  background: linear-gradient(180deg, var(--bg) 0%, var(--bg-alt) 100%);
 }
 .model-card .tab {
   background: transparent;
   border: 0;
   border-bottom: 2px solid transparent;
   border-radius: 0;
-  padding: 4px 10px;
+  padding: 5px 12px;
   color: var(--fg-dim);
   font-size: 12px;
   cursor: pointer;
+  box-shadow: none;
+  transition: color 120ms ease, background 120ms ease,
+    border-color 120ms ease;
 }
-.model-card .tab:hover {
-  background: var(--bg-dim);
+.model-card .tab:hover:not(:disabled) {
+  background: rgba(58, 92, 217, 0.06);
+  color: var(--fg);
+  box-shadow: none;
+  border-color: transparent;
 }
 .model-card .tab.sel {
   color: var(--accent);
   border-bottom-color: var(--accent);
   background: var(--bg);
+  font-weight: 600;
 }
 .model-card .tab.todo {
   color: var(--fg-dim);
