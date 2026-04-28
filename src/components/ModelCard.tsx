@@ -23,6 +23,7 @@ import type {
 import { extractTextFromFile, extractTextFromUrl } from '../parsers/docText';
 import { aiProvider } from '../domain/ai';
 import { getApiKey } from '../domain/openai';
+import { loadModelsDb, lookupModel } from '../data/modelsDb';
 import * as XLSX from 'xlsx';
 
 type Tab =
@@ -1657,6 +1658,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
       value: string;
       docId: string;
     } | null>(null);
+    const [dbBusy, setDbBusy] = useState(false);
     if (!m) return null;
     const chars = sortCharacteristics(m.characteristics ?? []);
     const missing = missingPriorityChars(chars, cls, sub);
@@ -1816,9 +1818,78 @@ export function ModelCard({ modelId }: { modelId: string }) {
       }
     };
 
+    const fillFromDb = async () => {
+      const code = m.normalizedCode || m.rawCode;
+      if (!code) {
+        alert('У модели нет кода — заполните «Код» во вкладке «Свойства».');
+        return;
+      }
+      setDbBusy(true);
+      try {
+        const db = await loadModelsDb();
+        const hit = lookupModel(db, m.rawCode, m.normalizedCode);
+        if (!hit) {
+          alert(
+            `В базе моделей нет записи по коду «${code}». ` +
+              `Проверьте написание или используйте «Обогатить из интернета».`,
+          );
+          return;
+        }
+        const priorityKeys = buildPriorityKeys();
+        const locked = (m.characteristics ?? []).filter((c) => c.lockedByExpert);
+        const lockedKeys = new Set(locked.map((c) => c.key.toLowerCase()));
+        const fromDb: Characteristic[] = [];
+        for (const [k, v] of Object.entries(hit.entry.chars)) {
+          if (lockedKeys.has(k.toLowerCase())) continue;
+          const priorityIdx = priorityKeys.findIndex(
+            (p) => p.key.toLowerCase() === k.toLowerCase(),
+          );
+          fromDb.push({
+            id: newId('c'),
+            key: k,
+            valueRaw: v.v,
+            unit: v.u,
+            targetUnit:
+              priorityIdx >= 0 ? priorityKeys[priorityIdx].unit : undefined,
+            isPriority: priorityIdx >= 0,
+            priorityOrder: priorityIdx >= 0 ? priorityIdx : undefined,
+            source: 'database' as const,
+          });
+        }
+        if (!fromDb.length) {
+          alert('Запись в базе пуста.');
+          return;
+        }
+        setChars([...locked, ...fromDb]);
+        const matchNote =
+          hit.code === (m.normalizedCode || normalizeModelCode(m.rawCode || '').code)
+            ? 'точное совпадение по коду'
+            : `совпадение «${hit.code}» (${hit.entry.raw})`;
+        // Уведомление через console (без модалок) — заголовок и так показывает источник.
+        console.info(
+          `[Модели] ${m.rawCode}: ${fromDb.length} характеристик из базы (${matchNote})`,
+        );
+      } catch (e) {
+        alert('Ошибка загрузки базы моделей: ' + (e as Error).message);
+      } finally {
+        setDbBusy(false);
+      }
+    };
+
     return (
       <div>
         <div className="row-flex" style={{ gap: 6, marginBottom: 6 }}>
+          <button
+            onClick={fillFromDb}
+            disabled={dbBusy || !(m.normalizedCode || m.rawCode)}
+            title={
+              !(m.normalizedCode || m.rawCode)
+                ? 'У модели нет кода'
+                : 'Заполнить характеристики из встроенной базы 35 000+ моделей оборудования (без обращения к ИИ)'
+            }
+          >
+            {dbBusy ? '⏳ Загрузка базы…' : '📚 Из базы моделей'}
+          </button>
           <button
             onClick={extractFromDocs}
             disabled={!(m.documents ?? []).some((d) => d.parsedText)}
@@ -2471,6 +2542,8 @@ function labelSource(s: ActionItem['source']): string {
       return 'ручной';
     case 'ai':
       return 'ИИ';
+    case 'database':
+      return 'база моделей';
     default:
       return String(s);
   }

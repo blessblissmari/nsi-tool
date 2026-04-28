@@ -118,7 +118,8 @@ export type SourceKind =
   | 'analog'
   | 'manual'
   | 'classifier'
-  | 'ai';
+  | 'ai'
+  | 'database';
 
 /** Тип ВВ — вид воздействия (по справочнику: ТО, ТР, КР, диагностика, осмотр…). */
 export type ActionKind = 'TO' | 'repair' | 'inspection' | 'diagnostic' | 'other';
