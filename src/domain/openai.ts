@@ -708,8 +708,17 @@ ${fewShot ? 'Эталон оформления (реальные строки и
       },
     });
     if (!result?.rows) return [];
+    // Защитный фильтр: даже если ИИ нарушил правило 5, режем крепёж.
+    // Регекс на отдельное слово, чтобы «Винтовой блок» не считалось «винт».
+    const fastenerRe =
+      /\b(гайк[аи]?|гайки|гайке|шайб[аы]?|шайбе|винт(?!ов\w*)|винты|винта|винту|шпильк\w*|хомут\w*|болт\w*|штифт\w*|шпонк\w*)\b/i;
     return result.rows
       .filter((x) => x.component && x.component.trim())
+      .filter(
+        (x) =>
+          !fastenerRe.test(x.component!) &&
+          !(x.subcomponent && fastenerRe.test(x.subcomponent)),
+      )
       .map((x) => ({
         component: x.component!.trim(),
         subcomponent: x.subcomponent?.trim() || undefined,
