@@ -577,7 +577,7 @@ export const useStore = create<Store>()(
     }),
     {
       name: 'nsi_store_v1',
-      version: 5,
+      version: 6,
       // v1→v2: подсыпаем дефолтный классификатор «Простоев.Нет», если в
       // сохранённом стейте классификатор пуст.
       // v2→v3: если иерархия пустая (был пустой seed) — подсыпаем демо-иерархию
@@ -667,6 +667,37 @@ export const useStore = create<Store>()(
           return { ...m, characteristics: merged };
         });
         next = { ...next, models: expanded };
+        // v5→v6: чистим единицы измерения «текст» — это не единица. Касается
+        // характеристик и приоритетных ключей классификатора.
+        const cleanUnit = (u?: string) => (u && u !== 'текст' ? u : undefined);
+        const cleanedModels = (next.models ?? []).map((mm) => ({
+          ...mm,
+          characteristics: (mm.characteristics ?? []).map((c) => ({
+            ...c,
+            unit: cleanUnit(c.unit),
+            targetUnit: cleanUnit(c.targetUnit),
+          })),
+        }));
+        next = { ...next, models: cleanedModels };
+        if (next.classifier?.classes) {
+          next.classifier = {
+            ...next.classifier,
+            classes: next.classifier.classes.map((cls) => ({
+              ...cls,
+              priorityChars: cls.priorityChars?.map((p) => ({
+                ...p,
+                unit: cleanUnit(p.unit),
+              })),
+              subclasses: cls.subclasses?.map((sub) => ({
+                ...sub,
+                priorityChars: sub.priorityChars?.map((p) => ({
+                  ...p,
+                  unit: cleanUnit(p.unit),
+                })),
+              })),
+            })),
+          };
+        }
         return next as Partial<Store>;
       },
       storage: createJSONStorage(() => localStorage, {

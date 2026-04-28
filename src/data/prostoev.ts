@@ -179,7 +179,7 @@ export const PROSTOEV_CLASSIFIER: Classifier = {
           name: 'Конические',
           keywords: ['коничес'],
           priorityChars: [
-            { key: 'Передаточное отношение', unit: 'текст', type: 'number' },
+            { key: 'Передаточное отношение', unit: undefined, type: 'number' },
             { key: 'Масса', unit: 'кг', type: 'number' },
             { key: 'Объём масла', unit: 'л', type: 'number' },
             { key: 'Межосевое расстояние', unit: 'мм', type: 'number' },
@@ -189,7 +189,7 @@ export const PROSTOEV_CLASSIFIER: Classifier = {
           name: 'Цилиндрические',
           keywords: ['цилиндр'],
           priorityChars: [
-            { key: 'Передаточное отношение', unit: 'текст', type: 'number' },
+            { key: 'Передаточное отношение', unit: undefined, type: 'number' },
             { key: 'Масса', unit: 'кг', type: 'number' },
             { key: 'Объём масла', unit: 'л', type: 'number' },
             { key: 'Межосевое расстояние', unit: 'мм', type: 'number' },
