@@ -93,6 +93,10 @@ interface Store {
     row: Partial<import('./domain/types').TechCardRow> & { id?: string },
   ): void;
   deleteTechCardRow(modelId: string, rowId: string): void;
+  setTechCard(
+    modelId: string,
+    rows: import('./domain/types').TechCardRow[],
+  ): void;
   // Reliability
   setFailures(
     modelId: string,
@@ -567,6 +571,12 @@ export const useStore = create<Store>()(
       m.id === modelId
         ? { ...m, techCard: (m.techCard ?? []).filter((r) => r.id !== rowId) }
         : m,
+    );
+    set({ models: next });
+  },
+  setTechCard(modelId, rows) {
+    const next = get().models.map((m) =>
+      m.id === modelId ? { ...m, techCard: rows } : m,
     );
     set({ models: next });
   },
