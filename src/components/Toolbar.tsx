@@ -6,6 +6,7 @@ import { aiProvider } from '../domain/ai';
 import { getApiKey } from '../domain/openai';
 import { loadModelsDb, lookupModel } from '../data/modelsDb';
 import type { Characteristic } from '../domain/types';
+import { BulkProcessing } from './BulkProcessing';
 
 let _idCounter = 0;
 const newCharId = () =>
@@ -14,6 +15,7 @@ const newCharId = () =>
 export function Toolbar() {
   const fileInput = useRef<HTMLInputElement>(null);
   const [msg, setMsg] = useState('');
+  const [showBulk, setShowBulk] = useState(false);
   const setHierarchy = useStore((s) => s.setHierarchy);
   const setClassifier = useStore((s) => s.setClassifier);
   const normalizeAll = useStore((s) => s.normalizeAll);
@@ -312,7 +314,16 @@ export function Toolbar() {
         Очистить
       </button>
 
+      <span className="sep" />
+      <button
+        title="Окно массовой обработки моделей (п.6.3 ТЗ): фильтры по статусам и пакетные операции."
+        onClick={() => setShowBulk(true)}
+      >
+        Массовая обработка
+      </button>
+
       <span className="status">{msg}</span>
+      {showBulk && <BulkProcessing onClose={() => setShowBulk(false)} />}
     </div>
   );
 }

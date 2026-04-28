@@ -205,6 +205,70 @@ export function AiSettings({ onClose }: Props) {
             </span>
             <span className="spacer" />
             <button
+              onClick={() => {
+                // Экспорт правил в JSON — п.6.1.6 ТЗ.
+                const blob = new Blob(
+                  [JSON.stringify(rules, null, 2)],
+                  { type: 'application/json' },
+                );
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'normalization-rules.json';
+                a.click();
+                URL.revokeObjectURL(url);
+              }}
+              title="Сохранить текущий набор правил в JSON-файл"
+            >
+              экспорт
+            </button>
+            <label
+              className="button-like"
+              title="Загрузить набор правил из JSON-файла (п.6.1.5 ТЗ)"
+              style={{
+                font: 'inherit',
+                background: 'linear-gradient(180deg,#fff 0%,var(--bg-alt) 100%)',
+                border: '1px solid var(--border)',
+                padding: '3px 9px',
+                cursor: 'pointer',
+                borderRadius: 4,
+                color: 'var(--fg)',
+                boxShadow: 'var(--shadow-sm)',
+              }}
+            >
+              загрузить
+              <input
+                type="file"
+                accept=".json,application/json"
+                style={{ display: 'none' }}
+                onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  try {
+                    const text = await file.text();
+                    const data = JSON.parse(text);
+                    if (
+                      !data ||
+                      !Array.isArray(data.modelRules) ||
+                      !Array.isArray(data.classRules)
+                    ) {
+                      alert(
+                        'Неверный формат: ожидается JSON с полями modelRules[] и classRules[].',
+                      );
+                      return;
+                    }
+                    setRules(data);
+                    alert(
+                      `Загружено правил: модели ${data.modelRules.length}, классы ${data.classRules.length}.`,
+                    );
+                  } catch (err) {
+                    alert('Не удалось прочитать JSON: ' + (err as Error).message);
+                  }
+                  e.currentTarget.value = '';
+                }}
+              />
+            </label>
+            <button
               onClick={resetRules}
               title="Сбросить к правилам «Простоев.Нет» по умолчанию"
             >

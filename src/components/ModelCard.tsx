@@ -6,7 +6,12 @@ import {
   subscribeUiSettings,
   type UiSettings,
 } from '../domain/uiSettings';
-import { normalizeModelCode } from '../domain/normalize';
+import {
+  normalizeModelCode,
+  normalizeOperation,
+  normalizeCharName,
+  normalizeUnit,
+} from '../domain/normalize';
 import { classifyModel } from '../domain/classify';
 import {
   parseCharacteristics,
@@ -240,6 +245,36 @@ export function ModelCard({ modelId }: { modelId: string }) {
         source: 'manual',
       });
 
+    /**
+     * Нормализация всех операций и единиц измерения в техкарте по правилам
+     * п.8.4 (операции) и п.8.6 (ед.изм.). Соответствует п.6.5.11 ТЗ.
+     */
+    const normalizeAllRows = () => {
+      let touched = 0;
+      for (const r of rows) {
+        const newOp = r.operation ? normalizeOperation(r.operation) : r.operation;
+        const newComp = r.component ? normalizeCharName(r.component) : r.component;
+        const newSub = r.subcomponent ? normalizeCharName(r.subcomponent) : r.subcomponent;
+        const newUnit = r.tmcUnit ? normalizeUnit(r.tmcUnit) : r.tmcUnit;
+        if (
+          newOp !== r.operation ||
+          newComp !== r.component ||
+          newSub !== r.subcomponent ||
+          newUnit !== r.tmcUnit
+        ) {
+          upsert(modelId, {
+            ...r,
+            operation: newOp ?? '',
+            component: newComp ?? '',
+            subcomponent: newSub ?? '',
+            tmcUnit: newUnit ?? '',
+          });
+          touched++;
+        }
+      }
+      setAiErr(touched ? `Нормализовано: ${touched}` : 'Все строки уже нормализованы.');
+    };
+
     /** Этап 3 ручного workflow: «Состав» (Элемент / Подэлемент). */
     const fillElementsAi = async () => {
       if (aiBusy) return;
@@ -463,6 +498,17 @@ export function ModelCard({ modelId }: { modelId: string }) {
             }
           >
             {aiBusy ? '…ИИ работает' : '⚡ Всё сразу'}
+          </button>
+          <button
+            onClick={normalizeAllRows}
+            disabled={rows.length === 0}
+            title={
+              rows.length === 0
+                ? 'Сначала добавьте строки в техкарту.'
+                : 'Нормализовать все наименования операций, элементов и единицы измерения по правилам п.8.4–8.6 ТЗ.'
+            }
+          >
+            🪄 Нормализовать
           </button>
           <button
             onClick={toggleFullscreen}
@@ -2129,6 +2175,22 @@ export function ModelCard({ modelId }: { modelId: string }) {
           >
             Обогатить из интернета
           </button>
+          <button
+            onClick={() => {
+              // Нормализация наименований и единиц по правилам п.8.5–8.6.
+              const next = (m.characteristics ?? []).map((c) => ({
+                ...c,
+                key: normalizeCharName(c.key),
+                unit: normalizeUnit(c.unit),
+                targetUnit: normalizeUnit(c.targetUnit),
+              }));
+              setChars(next);
+            }}
+            disabled={(m.characteristics ?? []).length === 0}
+            title="Нормализовать наименования характеристик и единицы измерения по правилам п.8.5–8.6 ТЗ."
+          >
+            🪄 Нормализовать
+          </button>
           {missing.length > 0 && (
             <span className="muted small">
               Не заполнено приоритетных: {missing.length}
@@ -2200,22 +2262,20 @@ export function ModelCard({ modelId }: { modelId: string }) {
                   </td>
                   <td className="muted small">
                     <SourceBadge source={c.source} />
-                    {c.documentId && (
-                      <button
-                        className="link-btn"
-                        title="Открыть фрагмент документа, на основании которого получено значение (п.7 ТЗ)"
-                        style={{ marginLeft: 4 }}
-                        onClick={() =>
-                          setExcerpt({
-                            key: c.key,
-                            value: c.valueRaw,
-                            docId: c.documentId!,
-                          })
-                        }
-                      >
-                        📎
-                      </button>
-                    )}
+                    <button
+                      className="link-btn"
+                      title="Окно с обоснованием (п.7.5 ТЗ): фрагмент документа, источник или правило, на основании которого заполнено поле."
+                      style={{ marginLeft: 4 }}
+                      onClick={() =>
+                        setExcerpt({
+                          key: c.key,
+                          value: c.valueRaw,
+                          docId: c.documentId ?? '',
+                        })
+                      }
+                    >
+                      📎
+                    </button>
                     {c.lockedByExpert ? ' 🔒' : ''}
                   </td>
                   <td>
@@ -2260,6 +2320,10 @@ export function ModelCard({ modelId }: { modelId: string }) {
             doc={(m.documents ?? []).find((d) => d.id === excerpt.docId)}
             charKey={excerpt.key}
             charValue={excerpt.value}
+            char={(m.characteristics ?? []).find(
+              (c) => c.key === excerpt.key,
+            )}
+            allDocs={m.documents ?? []}
             onClose={() => setExcerpt(null)}
           />
         )}
@@ -2397,6 +2461,60 @@ export function ModelCard({ modelId }: { modelId: string }) {
       0,
     );
 
+    // AOPL (Aggregate-Operation Parts List, п.6.6 ТЗ) = запчасти/материалы
+    // в разрезе компонент агрегата (Элемент → Подэлемент). Помогает понять,
+    // какие ТМЦ нужны для каждой части агрегата вне зависимости от ВВ.
+    const aoplGroups = new Map<
+      string,
+      {
+        component: string;
+        subcomponent?: string;
+        items: Array<{
+          name: string;
+          kind: 'material' | 'spare';
+          unit?: string;
+          qty: number;
+          refs: number;
+        }>;
+      }
+    >();
+    for (const r of rows) {
+      if (!r.tmcName || !r.tmcKind) continue;
+      if (!r.component) continue;
+      const key = `${r.component.trim().toLowerCase()}|${(r.subcomponent ?? '').trim().toLowerCase()}`;
+      let g = aoplGroups.get(key);
+      if (!g) {
+        g = {
+          component: r.component.trim(),
+          subcomponent: r.subcomponent?.trim() || undefined,
+          items: [],
+        };
+        aoplGroups.set(key, g);
+      }
+      const found = g.items.find(
+        (x) =>
+          x.name.toLowerCase() === r.tmcName!.trim().toLowerCase() &&
+          (x.unit ?? '').toLowerCase() === (r.tmcUnit ?? '').toLowerCase() &&
+          x.kind === r.tmcKind,
+      );
+      if (found) {
+        found.qty += r.tmcQty ?? 0;
+        found.refs += 1;
+      } else {
+        g.items.push({
+          name: r.tmcName.trim(),
+          kind: r.tmcKind,
+          unit: r.tmcUnit,
+          qty: r.tmcQty ?? 0,
+          refs: 1,
+        });
+      }
+    }
+    const aoplCount = Array.from(aoplGroups.values()).reduce(
+      (sum, g) => sum + g.items.length,
+      0,
+    );
+
     const exportXlsx = () => {
       const ws1 = XLSX.utils.json_to_sheet(
         bom.map((x) => ({
@@ -2421,9 +2539,24 @@ export function ModelCard({ modelId }: { modelId: string }) {
         }
       }
       const ws2 = XLSX.utils.json_to_sheet(aplRows);
+      const aoplRows: Array<Record<string, string | number>> = [];
+      for (const g of aoplGroups.values()) {
+        for (const x of g.items) {
+          aoplRows.push({
+            Элемент: g.component,
+            Подэлемент: g.subcomponent ?? '',
+            Наименование: x.name,
+            Тип: x.kind === 'material' ? 'материал' : 'запчасть',
+            Ед: x.unit ?? '',
+            Кол_во: x.qty,
+          });
+        }
+      }
+      const ws3 = XLSX.utils.json_to_sheet(aoplRows);
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws1, 'BOM');
       XLSX.utils.book_append_sheet(wb, ws2, 'APL');
+      XLSX.utils.book_append_sheet(wb, ws3, 'AOPL');
       XLSX.writeFile(
         wb,
         `Спецификация_${m.normalizedCode || m.rawCode}.xlsx`,
@@ -2438,7 +2571,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
           <span className="muted small">
             {isEmpty
               ? 'Техкарт нет. Дополните спецификацию из интернета или из аналогов — позиции добавятся в техкарты автоматически.'
-              : `BOM: ${bom.length} позиций · APL: ${aplCount} запчастей в ${aplGroups.size} ВВ · из ${rows.length} строк техкарт. Инструмент в спецификацию не попадает (п.6.6 ТЗ).`}
+              : `BOM: ${bom.length} · APL: ${aplCount} в ${aplGroups.size} ВВ · AOPL: ${aoplCount} в ${aoplGroups.size} компонент(ах) · из ${rows.length} строк техкарт. Инструмент в спецификацию не попадает (п.6.6 ТЗ).`}
           </span>
           <span className="spacer" />
           <button onClick={exportXlsx} disabled={!bom.length}>
@@ -2555,6 +2688,44 @@ export function ModelCard({ modelId }: { modelId: string }) {
             </table>
           </div>
         ))}
+
+        <h4 style={{ margin: '12px 0 4px' }}>
+          AOPL — детали в разрезе компонент агрегата
+        </h4>
+        {aoplGroups.size === 0 && (
+          <div className="muted small">
+            Не заполнено: добавьте «Элемент» в строки техкарты — AOPL соберётся автоматически.
+          </div>
+        )}
+        {Array.from(aoplGroups.values()).map((g, gi) => (
+          <div key={`aopl-${gi}`} style={{ marginBottom: 8 }}>
+            <div className="muted small" style={{ marginBottom: 2 }}>
+              <b>{g.component}</b>
+              {g.subcomponent ? ` / ${g.subcomponent}` : ''} · {g.items.length} позиц.
+            </div>
+            <table className="models">
+              <thead>
+                <tr>
+                  <th>Наименование</th>
+                  <th style={{ width: 90 }}>Тип</th>
+                  <th style={{ width: 80 }}>Ед.</th>
+                  <th style={{ width: 80 }}>Кол-во</th>
+                </tr>
+              </thead>
+              <tbody>
+                {g.items.map((x, i) => (
+                  <tr key={i}>
+                    <td>{x.name}</td>
+                    <td>{x.kind === 'material' ? 'материал' : 'запчасть'}</td>
+                    <td>{x.unit ?? '—'}</td>
+                    <td className="mono">{fmtQty(x.qty)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ))}
+
         {webSuggestions && (
           <BomSuggestionsModal
             modelId={modelId}
@@ -3131,19 +3302,33 @@ function DocExcerptModal({
   doc,
   charKey,
   charValue,
+  char,
+  allDocs,
   onClose,
 }: {
   doc?: DocumentRef;
   charKey: string;
   charValue: string;
+  char?: Characteristic;
+  allDocs?: DocumentRef[];
   onClose: () => void;
 }) {
-  const text = doc?.parsedText ?? '';
-  const lines = text.split(/\r?\n/);
+  // Если документ не привязан напрямую — попробуем найти первый
+  // документ, в котором встречается ключ/значение (п.7.5 ТЗ — окно
+  // с цитатой документа должно работать, даже если документ привязан
+  // через индекс, а не явный link).
   const keyLc = charKey.toLowerCase();
   const valLc = (charValue ?? '').toLowerCase();
-  // Помечаем строки, в которых упомянут ключ или значение
-  // (сигнальные символы — выделение курсивом / жёлтый фон).
+  const fallback = !doc
+    ? (allDocs ?? []).find((d) => {
+        const t = (d.parsedText ?? '').toLowerCase();
+        return (keyLc && t.includes(keyLc)) || (valLc && t.includes(valLc));
+      })
+    : undefined;
+  const usedDoc = doc ?? fallback;
+  const text = usedDoc?.parsedText ?? '';
+  const lines = text.split(/\r?\n/);
+  // Помечаем строки, в которых упомянут ключ или значение.
   const matches: Array<{ idx: number; line: string }> = [];
   for (let i = 0; i < lines.length; i++) {
     const lc = lines[i].toLowerCase();
@@ -3151,6 +3336,15 @@ function DocExcerptModal({
       matches.push({ idx: i, line: lines[i] });
     }
   }
+  const sourceExplain: Record<string, string> = {
+    document: 'Извлечено парсером из загруженного документа.',
+    web: 'Получено из общедоступных источников через ИИ-поиск (gpt-4o + интернет).',
+    ai: 'Сгенерировано ИИ-моделью (gpt-4o) на основе паспортных данных и общедоступных каталогов.',
+    classifier: 'Привязано классификатором по ключевым словам / regex.',
+    manual: 'Внесено вручную пользователем.',
+    analog: 'Получено по аналогии — взято из модели того же класса/подкласса.',
+    database: 'Совпадение по нормализованному коду в офлайн-базе моделей (35 181 запись).',
+  };
   return (
     <div
       onClick={onClose}
@@ -3177,34 +3371,65 @@ function DocExcerptModal({
         }}
       >
         <div className="row-flex" style={{ alignItems: 'center', gap: 6 }}>
-          <h3 style={{ margin: 0 }}>Фрагмент документа</h3>
+          <h3 style={{ margin: 0 }}>
+            Обоснование значения · п.7.5 ТЗ
+          </h3>
           <span className="spacer" />
           <button onClick={onClose}>×</button>
         </div>
         <div className="muted small" style={{ marginTop: 4 }}>
-          Источник для «<b>{charKey}</b>» = <b>{charValue || '—'}</b>
-          {doc?.url && (
+          «<b>{charKey}</b>» = <b>{charValue || '—'}</b>
+          {char?.source && (
             <>
               {' · '}
-              <a href={doc.url} target="_blank" rel="noreferrer">
+              <SourceBadge source={char.source} />
+            </>
+          )}
+          {usedDoc?.url && (
+            <>
+              {' · '}
+              <a href={usedDoc.url} target="_blank" rel="noreferrer">
                 открыть документ
               </a>
             </>
           )}
-          {doc?.filename && <> · {doc.filename}</>}
+          {usedDoc?.filename && <> · {usedDoc.filename}</>}
         </div>
-        {!doc && (
-          <div className="warn-text" style={{ marginTop: 8 }}>
-            Документ не найден.
+        {char?.source && (
+          <div
+            style={{
+              marginTop: 8,
+              padding: 8,
+              background: 'var(--bg-alt)',
+              border: '1px solid var(--border)',
+              borderRadius: 4,
+            }}
+          >
+            <div className="muted small" style={{ marginBottom: 4 }}>
+              Тип источника: <b>{char.source}</b>
+            </div>
+            <div className="small">{sourceExplain[char.source] ?? '—'}</div>
+            {char.lockedByExpert && (
+              <div className="small" style={{ marginTop: 4 }}>
+                🔒 Зафиксировано экспертом — автоматика не перезапишет.
+              </div>
+            )}
           </div>
         )}
-        {doc && !text.trim() && (
+        {!usedDoc && (
+          <div className="muted small" style={{ marginTop: 8 }}>
+            К этой строке документ не привязан. Если значение должно быть
+            проверено по паспорту — загрузите PDF/DOCX во вкладке «Документы»,
+            и тогда здесь появится цитата.
+          </div>
+        )}
+        {usedDoc && !text.trim() && (
           <div className="muted" style={{ marginTop: 8 }}>
             Распознанный текст для документа отсутствует. Откройте «Документы» →
             «вставить…» и вставьте текст вручную, либо загрузите файл.
           </div>
         )}
-        {doc && text.trim() && (
+        {usedDoc && text.trim() && (
           <div style={{ marginTop: 8 }}>
             {matches.length === 0 ? (
               <div className="muted small">

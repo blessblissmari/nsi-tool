@@ -58,8 +58,8 @@ interface Store {
   deleteModel(id: string): void;
 
   // Bulk actions
-  normalizeAll(): { done: number };
-  classifyByClassifier(): {
+  normalizeAll(scope?: ReadonlySet<string>): { done: number };
+  classifyByClassifier(scope?: ReadonlySet<string>): {
     matched: number;
     suggested: number;
     total: number;
@@ -264,12 +264,13 @@ export const useStore = create<Store>()(
     });
   },
 
-  normalizeAll() {
+  normalizeAll(scope) {
     let done = 0;
     const disabled = new Set(
       get().rules.modelRules.filter((r) => !r.enabled).map((r) => r.id),
     );
     const next = get().models.map((m) => {
+      if (scope && !scope.has(m.id)) return m;
       const r = normalizeModelCode(m.rawCode, disabled);
       if (r.code && r.code !== m.normalizedCode) done++;
       return { ...m, normalizedCode: r.code };
@@ -277,11 +278,12 @@ export const useStore = create<Store>()(
     set({ models: next });
     return { done };
   },
-  classifyByClassifier() {
+  classifyByClassifier(scope) {
     const { classifier } = get();
     let matched = 0;
     let suggested = 0;
     const next = get().models.map((m) => {
+      if (scope && !scope.has(m.id)) return m;
       // Не трогаем модели, у которых класс уже определён прямой привязкой
       // или вручную — иначе теряем уверенность 100% из файла привязок.
       if (
