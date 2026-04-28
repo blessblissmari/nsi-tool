@@ -11,6 +11,11 @@ import {
   getApiKey,
   type AiUsage,
 } from './domain/openai';
+import {
+  getUiSettings,
+  subscribeUiSettings,
+  type UiSettings,
+} from './domain/uiSettings';
 import './App.css';
 
 setAiProvider(openaiAiProvider);
@@ -19,19 +24,30 @@ export default function App() {
   const [usage, setUsage] = useState<AiUsage>(() => readUsage());
   const [hasKey, setHasKey] = useState(() => !!getApiKey());
   const [showSettings, setShowSettings] = useState(false);
+  const [ui, setUi] = useState<UiSettings>(() => getUiSettings());
   useEffect(() => {
     const onU = (e: Event) =>
       setUsage((e as CustomEvent<AiUsage>).detail ?? readUsage());
     const onK = () => setHasKey(!!getApiKey());
     window.addEventListener('nsi:ai-usage', onU);
     window.addEventListener('nsi:ai-key-changed', onK);
+    const off = subscribeUiSettings(setUi);
     return () => {
       window.removeEventListener('nsi:ai-usage', onU);
       window.removeEventListener('nsi:ai-key-changed', onK);
+      off();
     };
   }, []);
 
-  return <Inner usage={usage} hasKey={hasKey} setShowSettings={setShowSettings} showSettings={showSettings} />;
+  return (
+    <Inner
+      usage={usage}
+      hasKey={hasKey}
+      setShowSettings={setShowSettings}
+      showSettings={showSettings}
+      ui={ui}
+    />
+  );
 }
 
 function Inner({
@@ -39,12 +55,15 @@ function Inner({
   hasKey,
   setShowSettings,
   showSettings,
+  ui,
 }: {
   usage: AiUsage;
   hasKey: boolean;
   setShowSettings: (b: boolean) => void;
   showSettings: boolean;
+  ui: UiSettings;
 }) {
+  const selectedModelId = useStore((s) => s.selectedModelId);
   const models = useStore((s) => s.models);
   const classifier = useStore((s) => s.classifier);
   const stats = useMemo(() => {
@@ -88,42 +107,47 @@ function Inner({
     <div className="app">
       <header className="app-head">
         <span className="brand">НСИ</span>
-        <span className="hint">
-          Иерархия · ТОР · Нормализация (п.8.3) · Документы · Характеристики
-        </span>
         <span className="spacer" />
         <span className="stats">
-          Моделей: {stats.total} · Нормализовано: {stats.norm} · ТОР: {stats.tor}{' '}
-          · Без класса: {stats.unresolved}
-          {stats.total > 0 && (
+          {stats.total > 0 ? (
             <>
-              {' · '}
-              <span
-                title="п.7 ТЗ — оценка качества: средняя полнота приоритетных характеристик по моделям с классом"
-              >
-                Полнота хар-к: {Math.round(stats.completeness * 100)}%
-              </span>
-              {' · '}
-              <span title="п.7 ТЗ — итоговая оценка проверки человеком">
-                Проверено: {stats.expertOk}/{stats.total}
-              </span>
+              Моделей {stats.total} · ТОР {stats.tor}
+              {stats.unresolved > 0 && <> · без класса {stats.unresolved}</>}
+              {stats.total > 0 && (
+                <>
+                  {' · '}
+                  <span title="п.7 ТЗ — средняя полнота приоритетных характеристик">
+                    хар-к {Math.round(stats.completeness * 100)}%
+                  </span>
+                  {' · '}
+                  <span title="п.7 ТЗ — доля моделей, проверенных экспертом">
+                    проверено {stats.expertOk}/{stats.total}
+                  </span>
+                </>
+              )}
             </>
+          ) : (
+            <span className="muted">Нет данных — нажмите «Загрузить»</span>
           )}
         </span>
         <button
           onClick={() => setShowSettings(true)}
           title={
             hasKey
-              ? `Настройки ИИ · ${usage.requests} запросов · $${usage.costUsd.toFixed(4)}`
-              : 'Подключить ИИ (OpenAI API ключ)'
+              ? `ИИ ${usage.requests} запросов · $${usage.costUsd.toFixed(4)}`
+              : 'Настройки (ИИ-ключ, картинки, сброс демо)'
           }
-          style={{ marginLeft: 12 }}
         >
-          ИИ {hasKey ? `· $${usage.costUsd.toFixed(4)}` : '·  выкл'}
+          Настройки{hasKey ? ` · ИИ $${usage.costUsd.toFixed(4)}` : ''}
         </button>
       </header>
       <Toolbar />
-      <main className="layout">
+      <main
+        className={
+          'layout' +
+          (ui.modelCardFullscreen && selectedModelId ? ' fullscreen-card' : '')
+        }
+      >
         <aside className="left">
           <Tree />
         </aside>

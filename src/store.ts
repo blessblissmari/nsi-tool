@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { persist, createJSONStorage } from 'zustand/middleware';
 import type {
   Classifier,
   EquipmentModel,
@@ -11,14 +12,16 @@ import { normalizeModelCode } from './domain/normalize';
 import type { ClassificationRow } from './parsers/classification';
 import type { ActionsImportRow } from './parsers/actions';
 import type { CharsImportRow } from './parsers/charsImport';
-import type { ReferenceData } from './domain/types';
+import type { ReferenceData, Characteristic } from './domain/types';
 import type { ReferenceKind } from './parsers/references';
 import { parseValue } from './domain/units';
 import {
   SEED_CLASSIFIER,
   SEED_NORMALIZATION_RULES,
+  SEED_REFERENCES,
   buildSeedHierarchy,
 } from './data/seed';
+import { PROSTOEV_CLASSIFIER } from './data/prostoev';
 
 interface Store {
   hierarchy: HierarchyNode;
@@ -33,6 +36,10 @@ interface Store {
   setHierarchy(h: HierarchyNode, models: EquipmentModel[]): void;
   setClassifier(c: Classifier): void;
   setRules(r: NormalizationRules): void;
+  /** Перезагрузить встроенную демо-иерархию «Северал» + классификатор Простоев.Нет. */
+  resetToSeed(): void;
+  /** Полностью очистить иерархию и модели (оставить только корень). */
+  clearAll(): void;
   selectNode(id: string | undefined): void;
   selectModel(id: string | undefined): void;
   toggleExpand(id: string): void;
@@ -51,8 +58,8 @@ interface Store {
   deleteModel(id: string): void;
 
   // Bulk actions
-  normalizeAll(): { done: number };
-  classifyByClassifier(): {
+  normalizeAll(scope?: ReadonlySet<string>): { done: number };
+  classifyByClassifier(scope?: ReadonlySet<string>): {
     matched: number;
     suggested: number;
     total: number;
@@ -95,15 +102,27 @@ interface Store {
 
 const seed = buildSeedHierarchy();
 
-export const useStore = create<Store>((set, get) => ({
+function seedInitialExpanded(h: HierarchyNode): Set<string> {
+  // Разворачиваем первые два уровня — чтобы инженер сразу видел структуру.
+  const ids = new Set<string>([h.id]);
+  for (const c of h.children) {
+    ids.add(c.id);
+    for (const c2 of c.children) ids.add(c2.id);
+  }
+  return ids;
+}
+
+export const useStore = create<Store>()(
+  persist(
+    (set, get) => ({
   hierarchy: seed.hierarchy,
   models: seed.models,
   classifier: SEED_CLASSIFIER,
   rules: SEED_NORMALIZATION_RULES,
-  references: { actions: [], operations: [], specialties: [], units: [] },
+  references: SEED_REFERENCES,
   selectedNodeId: seed.hierarchy.id,
   selectedModelId: undefined,
-  expandedIds: new Set([seed.hierarchy.id]),
+  expandedIds: seedInitialExpanded(seed.hierarchy),
 
   setHierarchy(h, models) {
     set({
@@ -119,6 +138,35 @@ export const useStore = create<Store>((set, get) => ({
   },
   setRules(r) {
     set({ rules: r });
+  },
+  resetToSeed() {
+    const s = buildSeedHierarchy();
+    set({
+      hierarchy: s.hierarchy,
+      models: s.models,
+      classifier: PROSTOEV_CLASSIFIER,
+      rules: SEED_NORMALIZATION_RULES,
+      references: SEED_REFERENCES,
+      selectedNodeId: s.hierarchy.id,
+      selectedModelId: undefined,
+      expandedIds: seedInitialExpanded(s.hierarchy),
+    });
+  },
+  clearAll() {
+    const root: HierarchyNode = {
+      id: 'root-empty',
+      type: 'enterprise',
+      name: 'Иерархия',
+      levelLabel: 'Предприятие',
+      children: [],
+    };
+    set({
+      hierarchy: root,
+      models: [],
+      selectedNodeId: root.id,
+      selectedModelId: undefined,
+      expandedIds: new Set([root.id]),
+    });
   },
   selectNode(id) {
     set({ selectedNodeId: id, selectedModelId: undefined });
@@ -216,21 +264,26 @@ export const useStore = create<Store>((set, get) => ({
     });
   },
 
-  normalizeAll() {
+  normalizeAll(scope) {
     let done = 0;
+    const disabled = new Set(
+      get().rules.modelRules.filter((r) => !r.enabled).map((r) => r.id),
+    );
     const next = get().models.map((m) => {
-      const r = normalizeModelCode(m.rawCode);
+      if (scope && !scope.has(m.id)) return m;
+      const r = normalizeModelCode(m.rawCode, disabled);
       if (r.code && r.code !== m.normalizedCode) done++;
       return { ...m, normalizedCode: r.code };
     });
     set({ models: next });
     return { done };
   },
-  classifyByClassifier() {
+  classifyByClassifier(scope) {
     const { classifier } = get();
     let matched = 0;
     let suggested = 0;
     const next = get().models.map((m) => {
+      if (scope && !scope.has(m.id)) return m;
       // Не трогаем модели, у которых класс уже определён прямой привязкой
       // или вручную — иначе теряем уверенность 100% из файла привязок.
       if (
@@ -523,7 +576,158 @@ export const useStore = create<Store>((set, get) => ({
     );
     set({ models: next });
   },
-}));
+    }),
+    {
+      name: 'nsi_store_v1',
+      version: 6,
+      // v1→v2: подсыпаем дефолтный классификатор «Простоев.Нет», если в
+      // сохранённом стейте классификатор пуст.
+      // v2→v3: если иерархия пустая (был пустой seed) — подсыпаем демо-иерархию
+      // «Северал» из бандлированного xlsx, чтобы инженер сразу видел
+      // работу иерархии/ТОР. Пользовательские иерархии/классификаторы
+      // не трогаем.
+      migrate: (persisted: unknown) => {
+        const ps = (persisted ?? {}) as Partial<Store>;
+        const cls = ps.classifier;
+        let next = ps;
+        if (!cls || !cls.classes || cls.classes.length === 0) {
+          next = { ...next, classifier: SEED_CLASSIFIER };
+        } else if (cls.classes.length < PROSTOEV_CLASSIFIER.classes.length) {
+          // Старый минимальный seed → заменить на полный Простоев.Нет.
+          next = { ...next, classifier: SEED_CLASSIFIER };
+        }
+        const h = next.hierarchy;
+        const hasAny =
+          h && ((h.children?.length ?? 0) > 0 || (h.modelIds?.length ?? 0) > 0);
+        if (!hasAny) {
+          const seeded = buildSeedHierarchy();
+          next = {
+            ...next,
+            hierarchy: seeded.hierarchy,
+            models: seeded.models,
+            expandedIds: new Set([seeded.hierarchy.id]),
+          };
+        }
+        // v3→v4: подсыпаем справочники Простоев.Нет (ВВ, операции,
+        // специальности, характеристики), если пользователь ещё ничего
+        // не загружал.
+        const r = next.references;
+        const refsEmpty =
+          !r ||
+          ((r.actions?.length ?? 0) === 0 &&
+            (r.operations?.length ?? 0) === 0 &&
+            (r.specialties?.length ?? 0) === 0 &&
+            (r.units?.length ?? 0) === 0);
+        if (refsEmpty) {
+          next = { ...next, references: SEED_REFERENCES };
+        }
+        // v4→v5: дополняем модели полным набором характеристик из «Результирующий
+        // файл Модели с характ. ист. полный.xlsx». Применяем только к моделям
+        // seed (где источник характеристик 'document' и нет lockedByExpert) —
+        // пользовательские правки не трогаем.
+        const seedModels = buildSeedHierarchy().models;
+        const seedCharsByCode = new Map<string, Characteristic[]>();
+        for (const sm of seedModels) {
+          if (sm.characteristics?.length && sm.normalizedCode) {
+            seedCharsByCode.set(sm.normalizedCode, sm.characteristics);
+          }
+        }
+        const curModels = next.models ?? [];
+        const expanded = curModels.map((m) => {
+          if (!m.normalizedCode) return m;
+          const seedChars = seedCharsByCode.get(m.normalizedCode);
+          if (!seedChars) return m;
+          const existing = m.characteristics ?? [];
+          // Если в модели уже есть зафиксированные значения — оставляем их
+          // и только добавляем новые ключи.
+          const lockedKeys = new Set(
+            existing
+              .filter((c) => c.lockedByExpert)
+              .map((c) => c.key.toLowerCase()),
+          );
+          const isUserModified = existing.some(
+            (c) => c.lockedByExpert || c.source === 'manual',
+          );
+          if (isUserModified) {
+            // Только дополняем недостающие ключи.
+            const haveKeys = new Set(existing.map((c) => c.key.toLowerCase()));
+            const extra = seedChars.filter(
+              (c) => !haveKeys.has(c.key.toLowerCase()),
+            );
+            if (!extra.length) return m;
+            return { ...m, characteristics: [...existing, ...extra] };
+          }
+          // Иначе заменяем целиком.
+          const merged = seedChars.map((c) => {
+            if (lockedKeys.has(c.key.toLowerCase())) {
+              return existing.find(
+                (e) => e.key.toLowerCase() === c.key.toLowerCase(),
+              )!;
+            }
+            return c;
+          });
+          return { ...m, characteristics: merged };
+        });
+        next = { ...next, models: expanded };
+        // v5→v6: чистим единицы измерения «текст» — это не единица. Касается
+        // характеристик и приоритетных ключей классификатора.
+        const cleanUnit = (u?: string) => (u && u !== 'текст' ? u : undefined);
+        const cleanedModels = (next.models ?? []).map((mm) => ({
+          ...mm,
+          characteristics: (mm.characteristics ?? []).map((c) => ({
+            ...c,
+            unit: cleanUnit(c.unit),
+            targetUnit: cleanUnit(c.targetUnit),
+          })),
+        }));
+        next = { ...next, models: cleanedModels };
+        if (next.classifier?.classes) {
+          next.classifier = {
+            ...next.classifier,
+            classes: next.classifier.classes.map((cls) => ({
+              ...cls,
+              priorityChars: cls.priorityChars?.map((p) => ({
+                ...p,
+                unit: cleanUnit(p.unit),
+              })),
+              subclasses: cls.subclasses?.map((sub) => ({
+                ...sub,
+                priorityChars: sub.priorityChars?.map((p) => ({
+                  ...p,
+                  unit: cleanUnit(p.unit),
+                })),
+              })),
+            })),
+          };
+        }
+        return next as Partial<Store>;
+      },
+      storage: createJSONStorage(() => localStorage, {
+        // Сериализуем Set как массив, чтобы JSON корректно его сохранял.
+        replacer: (_k, v) => (v instanceof Set ? { __set: Array.from(v) } : v),
+        reviver: (_k, v) => {
+          if (
+            v &&
+            typeof v === 'object' &&
+            Array.isArray((v as { __set?: unknown[] }).__set)
+          ) {
+            return new Set((v as { __set: string[] }).__set);
+          }
+          return v;
+        },
+      }),
+      // Не сохраняем выбор узла/модели — эфемерный UI-стейт.
+      partialize: (s) => ({
+        hierarchy: s.hierarchy,
+        models: s.models,
+        classifier: s.classifier,
+        rules: s.rules,
+        references: s.references,
+        expandedIds: s.expandedIds,
+      }),
+    },
+  ),
+);
 
 function canon(s: string): string {
   return String(s ?? '')

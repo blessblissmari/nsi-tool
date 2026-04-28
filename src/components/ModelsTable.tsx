@@ -1,7 +1,12 @@
+import { useEffect, useState } from 'react';
 import { useStore } from '../store';
 import type { EquipmentModel } from '../domain/types';
-import { useState } from 'react';
 import { ModelCard } from './ModelCard';
+import {
+  getUiSettings,
+  subscribeUiSettings,
+  type UiSettings,
+} from '../domain/uiSettings';
 
 export function ModelsTable({
   models,
@@ -14,12 +19,16 @@ export function ModelsTable({
   const selectModel = useStore((s) => s.selectModel);
   const selectedId = useStore((s) => s.selectedModelId);
   const [draft, setDraft] = useState('');
+  const [ui, setUi] = useState<UiSettings>(() => getUiSettings());
+  useEffect(() => subscribeUiSettings(setUi), []);
+  const showImg = ui.showModelImages;
 
   return (
     <div>
       <table className="models">
         <thead>
           <tr>
+            {showImg && <th style={{ width: 28 }}></th>}
             <th style={{ width: 280 }}>Код модели</th>
             <th style={{ width: 200 }}>Класс</th>
             <th style={{ width: 220 }}>Подкласс</th>
@@ -37,6 +46,21 @@ export function ModelsTable({
                 className={selectedId === m.id ? 'sel' : ''}
                 onClick={() => selectModel(m.id)}
               >
+                {showImg && (
+                  <td>
+                    {m.imageUrl && (
+                      <img
+                        src={m.imageUrl}
+                        alt=""
+                        className="model-thumb"
+                        onError={(e) => {
+                          (e.currentTarget as HTMLImageElement).style.display =
+                            'none';
+                        }}
+                      />
+                    )}
+                  </td>
+                )}
                 <td className="mono">{code}</td>
                 <td>{m.className || <span className="muted">—</span>}</td>
                 <td>{m.subclassName || <span className="muted">—</span>}</td>
@@ -63,7 +87,7 @@ export function ModelsTable({
           })}
           {models.length === 0 && (
             <tr>
-              <td colSpan={5} className="muted">
+              <td colSpan={showImg ? 6 : 5} className="muted">
                 Нет моделей
               </td>
             </tr>

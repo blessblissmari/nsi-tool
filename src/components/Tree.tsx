@@ -12,10 +12,30 @@ const TYPE_LABEL: Record<HierarchyNode['type'], string> = {
 
 export function Tree() {
   const hierarchy = useStore((s) => s.hierarchy);
+  const expandAll = useStore((s) => s.expandAll);
+  const collapseAll = useStore((s) => s.collapseAll);
   return (
-    <ul className="tree">
-      <TreeItem node={hierarchy} depth={0} />
-    </ul>
+    <div className="tree-wrap">
+      <div className="tree-header">
+        <button
+          className="iconbtn"
+          title="Развернуть всё дерево"
+          onClick={expandAll}
+        >
+          ⊞
+        </button>
+        <button
+          className="iconbtn"
+          title="Свернуть дерево"
+          onClick={collapseAll}
+        >
+          ⊟
+        </button>
+      </div>
+      <ul className="tree">
+        <TreeItem node={hierarchy} depth={0} />
+      </ul>
+    </div>
   );
 }
 

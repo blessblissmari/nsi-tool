@@ -1,16 +1,23 @@
 import { useRef, useState } from 'react';
 import { useStore } from '../store';
 import { autoImportFile } from '../parsers/autoImport';
+import { downloadWorkbook } from '../parsers/export';
 import { aiProvider } from '../domain/ai';
 import { getApiKey } from '../domain/openai';
+import { loadModelsDb, lookupModel } from '../data/modelsDb';
+import type { Characteristic } from '../domain/types';
+import { BulkProcessing } from './BulkProcessing';
+
+let _idCounter = 0;
+const newCharId = () =>
+  `c-db-${++_idCounter}-${Date.now().toString(36)}`;
 
 export function Toolbar() {
   const fileInput = useRef<HTMLInputElement>(null);
   const [msg, setMsg] = useState('');
+  const [showBulk, setShowBulk] = useState(false);
   const setHierarchy = useStore((s) => s.setHierarchy);
   const setClassifier = useStore((s) => s.setClassifier);
-  const expandAll = useStore((s) => s.expandAll);
-  const collapseAll = useStore((s) => s.collapseAll);
   const normalizeAll = useStore((s) => s.normalizeAll);
   const classifyByClassifier = useStore((s) => s.classifyByClassifier);
   const applyClassification = useStore((s) => s.applyClassification);
@@ -191,11 +198,132 @@ export function Toolbar() {
         Классифицировать ИИ
       </button>
 
+      <button
+        title="Заполнить характеристики из встроенной базы 35 000+ моделей оборудования (без обращения к ИИ). Существующие зафиксированные значения не трогаются."
+        onClick={async () => {
+          const state = useStore.getState();
+          const update = state.updateModel;
+          const cls = state.classifier;
+          const need = state.models.filter(
+            (m) => (m.characteristics ?? []).filter((c) => !!c.valueRaw).length < 2,
+          );
+          if (!need.length) {
+            setMsg(
+              'У всех моделей уже есть характеристики (≥2 заполненных). Если хотите перезаполнить — откройте конкретную модель и нажмите «📚 Из базы моделей» во вкладке «Характеристики».',
+            );
+            return;
+          }
+          setMsg(`База моделей: загрузка…`);
+          let db;
+          try {
+            db = await loadModelsDb();
+          } catch (e) {
+            setMsg('Ошибка загрузки базы моделей: ' + (e as Error).message);
+            return;
+          }
+          let matched = 0;
+          let totalChars = 0;
+          for (let i = 0; i < need.length; i++) {
+            const m = need[i];
+            const hit = lookupModel(db, m.rawCode, m.normalizedCode);
+            if (!hit) continue;
+            const sc = cls.classes
+              .find((c) => c.name === m.className)
+              ?.subclasses.find((s) => s.name === m.subclassName);
+            const priorityKeys: Array<{ key: string; unit?: string }> = [];
+            for (const p of cls.classes.find((c) => c.name === m.className)
+              ?.priorityChars ?? []) {
+              priorityKeys.push({ key: p.key, unit: p.unit });
+            }
+            for (const p of sc?.priorityChars ?? []) {
+              if (!priorityKeys.find((k) => k.key === p.key))
+                priorityKeys.push({ key: p.key, unit: p.unit });
+            }
+            const locked = (m.characteristics ?? []).filter((c) => c.lockedByExpert);
+            const lockedKeys = new Set(locked.map((c) => c.key.toLowerCase()));
+            const fromDb: Characteristic[] = [];
+            for (const [k, v] of Object.entries(hit.entry.chars)) {
+              if (lockedKeys.has(k.toLowerCase())) continue;
+              const pIdx = priorityKeys.findIndex(
+                (p) => p.key.toLowerCase() === k.toLowerCase(),
+              );
+              fromDb.push({
+                id: newCharId(),
+                key: k,
+                valueRaw: v.v,
+                unit: v.u,
+                targetUnit: pIdx >= 0 ? priorityKeys[pIdx].unit : undefined,
+                isPriority: pIdx >= 0,
+                priorityOrder: pIdx >= 0 ? pIdx : undefined,
+                source: 'database',
+              });
+            }
+            if (!fromDb.length) continue;
+            update(m.id, { characteristics: [...locked, ...fromDb] });
+            matched++;
+            totalChars += fromDb.length;
+            if ((i & 31) === 0)
+              setMsg(`База моделей: ${i + 1} из ${need.length} (найдено: ${matched})`);
+          }
+          setMsg(
+            `База моделей: заполнено ${matched} из ${need.length} моделей, всего ${totalChars} характеристик.`,
+          );
+        }}
+      >
+        Заполнить из базы
+      </button>
+
       <span className="sep" />
-      <button onClick={expandAll} title="Развернуть всё дерево">Развернуть</button>
-      <button onClick={collapseAll} title="Свернуть дерево">Свернуть</button>
+      <button
+        title="Экспорт в XLSX: листы «Иерархия», «Классификация», «Характеристики», «ВВ»."
+        onClick={() => {
+          const s = useStore.getState();
+          const stamp = new Date().toISOString().slice(0, 10);
+          downloadWorkbook(s.hierarchy, s.models, `nsi-${stamp}.xlsx`);
+          setMsg('Экспорт сформирован.');
+        }}
+      >
+        Экспорт
+      </button>
+
+      <span className="sep" />
+      <button
+        title="Перезагрузить встроенные демо-данные (иерархия «Северал», классификатор «Простоев.Нет»). Затрёт текущие данные."
+        onClick={() => {
+          if (
+            confirm(
+              'Перезагрузить демо-данные? Текущая иерархия и модели будут заменены на встроенный пример «Северал».',
+            )
+          ) {
+            useStore.getState().resetToSeed();
+            setMsg('Демо-данные восстановлены.');
+          }
+        }}
+      >
+        Сбросить демо
+      </button>
+      <button
+        title="Очистить иерархию и модели (оставить только пустой корень)."
+        onClick={() => {
+          if (confirm('Очистить иерархию и удалить все модели? Действие необратимо.')) {
+            useStore.getState().clearAll();
+            setMsg('Иерархия очищена.');
+          }
+        }}
+      >
+        Очистить
+      </button>
+
+      <span className="sep" />
+      <button
+        title="Окно массовой обработки моделей (п.6.3 ТЗ): фильтры по статусам и пакетные операции."
+        onClick={() => setShowBulk(true)}
+      >
+        Массовая обработка
+      </button>
 
       <span className="status">{msg}</span>
+      {showBulk && <BulkProcessing onClose={() => setShowBulk(false)} />}
     </div>
   );
 }
