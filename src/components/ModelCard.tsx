@@ -226,17 +226,128 @@ export function ModelCard({ modelId }: { modelId: string }) {
     const addBlankRow = () =>
       upsert(modelId, {
         component: '',
+        subcomponent: '',
         operation: '',
         actionId: undefined,
         specialty: '',
         qualification: '',
         laborHours: undefined,
+        workers: undefined,
         tmcName: '',
         tmcKind: undefined,
         tmcUnit: '',
         tmcQty: undefined,
         source: 'manual',
       });
+
+    /** Этап 3 ручного workflow: «Состав» (Элемент / Подэлемент). */
+    const fillElementsAi = async () => {
+      if (aiBusy) return;
+      if (!hasKey) {
+        setAiErr('Укажите OpenAI ключ в «Настройках».');
+        return;
+      }
+      setAiBusy(true);
+      setAiErr('');
+      try {
+        const docText = (m.documents ?? [])
+          .map((d) => d.parsedText ?? '')
+          .filter(Boolean)
+          .join('\n\n');
+        const result = await aiProvider().fillElementsAndSubelements({
+          model: {
+            className: m.className,
+            subclassName: m.subclassName,
+            normalizedCode: m.normalizedCode,
+            rawCode: m.rawCode,
+          },
+          docText: docText || undefined,
+        });
+        if (result.length === 0) {
+          setAiErr('ИИ не вернул состав. Очистите кэш ИИ и повторите.');
+          return;
+        }
+        for (const r of result) {
+          upsert(modelId, {
+            component: r.component,
+            subcomponent: r.subcomponent,
+            source: 'ai',
+          });
+        }
+      } catch (e) {
+        setAiErr('Ошибка ИИ: ' + (e instanceof Error ? e.message : String(e)));
+      } finally {
+        setAiBusy(false);
+      }
+    };
+
+    /** Этап 4 ручного workflow: «Операции» с правилами Демонтаж/Монтаж. */
+    const fillOperationsAi = async () => {
+      if (aiBusy) return;
+      if (!hasKey) {
+        setAiErr('Укажите OpenAI ключ в «Настройках».');
+        return;
+      }
+      // Берём уникальные пары элемент+подэлемент из существующих строк.
+      const existing = m.techCard ?? [];
+      const compsMap = new Map<string, { component: string; subcomponent?: string }>();
+      for (const r of existing) {
+        if (!r.component?.trim()) continue;
+        const k = `${r.component.trim()}|${(r.subcomponent ?? '').trim()}`;
+        if (!compsMap.has(k))
+          compsMap.set(k, {
+            component: r.component.trim(),
+            subcomponent: r.subcomponent?.trim() || undefined,
+          });
+      }
+      if (compsMap.size === 0) {
+        setAiErr('Сначала заполните состав (этап 3 — кнопка «🧩 Состав»).');
+        return;
+      }
+      setAiBusy(true);
+      setAiErr('');
+      try {
+        const docText = (m.documents ?? [])
+          .map((d) => d.parsedText ?? '')
+          .filter(Boolean)
+          .join('\n\n');
+        const result = await aiProvider().fillOperationsForElements({
+          model: {
+            className: m.className,
+            subclassName: m.subclassName,
+            normalizedCode: m.normalizedCode,
+            rawCode: m.rawCode,
+          },
+          components: Array.from(compsMap.values()),
+          operationsRef: ops.map((o) => o.name),
+          docText: docText || undefined,
+        });
+        if (result.length === 0) {
+          setAiErr('ИИ не вернул операции. Очистите кэш ИИ и повторите.');
+          return;
+        }
+        // Удаляем существующие пустые строки (component без operation),
+        // потом вставляем новые с операциями.
+        for (const r0 of existing) {
+          if (r0.component && !r0.operation) {
+            del(modelId, r0.id);
+          }
+        }
+        for (const r of result) {
+          upsert(modelId, {
+            component: r.component,
+            subcomponent: r.subcomponent,
+            operation: r.operation,
+            workDescription: r.workDescription,
+            source: 'ai',
+          });
+        }
+      } catch (e) {
+        setAiErr('Ошибка ИИ: ' + (e instanceof Error ? e.message : String(e)));
+      } finally {
+        setAiBusy(false);
+      }
+    };
 
     const fillByAi = async () => {
       if (aiBusy) return;
@@ -317,6 +428,30 @@ export function ModelCard({ modelId }: { modelId: string }) {
         >
           <button onClick={addBlankRow}>+ строка</button>
           <button
+            onClick={fillElementsAi}
+            disabled={aiBusy || !hasKey}
+            title={
+              !hasKey
+                ? 'Укажите OpenAI ключ в «Настройках».'
+                : 'Этап 3 ручного workflow: ИИ заполняет состав (Элемент / Подэлемент) по правилам заказчика — без крепежа, существ. в им.падеже ед.числе.'
+            }
+          >
+            {aiBusy ? '…' : '🧩 Состав'}
+          </button>
+          <button
+            onClick={fillOperationsAi}
+            disabled={aiBusy || !hasKey || rows.length === 0}
+            title={
+              !hasKey
+                ? 'Укажите OpenAI ключ в «Настройках».'
+                : rows.length === 0
+                  ? 'Сначала заполните состав (кнопка «🧩 Состав»).'
+                  : 'Этап 4: ИИ заполняет операции по правилам заказчика — Замена→Демонтаж+Монтаж, обязательная пара Демонтаж/Монтаж.'
+            }
+          >
+            {aiBusy ? '…' : '🔧 Операции'}
+          </button>
+          <button
             onClick={fillByAi}
             disabled={aiBusy || !hasKey || acts.length === 0}
             title={
@@ -324,10 +459,10 @@ export function ModelCard({ modelId }: { modelId: string }) {
                 ? 'Укажите OpenAI ключ в «Настройках».'
                 : acts.length === 0
                   ? 'Добавьте хотя бы одно ВВ перед заполнением ИИ.'
-                  : 'Сгенерировать техкарту по шаблону Простоев.Нет на основе класса/подкласса и списка ВВ.'
+                  : 'Сгенерировать техкарту целиком по шаблону Простоев.Нет на основе класса/подкласса и списка ВВ.'
             }
           >
-            {aiBusy ? '…ИИ работает' : '⚡ Заполнить ИИ'}
+            {aiBusy ? '…ИИ работает' : '⚡ Всё сразу'}
           </button>
           <button
             onClick={toggleFullscreen}
@@ -356,16 +491,19 @@ export function ModelCard({ modelId }: { modelId: string }) {
           <table className="models">
             <thead>
               <tr>
-                <th style={{ width: 160 }}>Компонент</th>
-                <th style={{ width: 200 }}>Операция</th>
-                <th style={{ width: 100 }}>ВВ</th>
-                <th style={{ width: 80 }}>Период, ч</th>
-                <th style={{ width: 140 }}>Профессия</th>
-                <th style={{ width: 70 }}>Разряд</th>
-                <th style={{ width: 70 }}>Норм-ч</th>
-                <th style={{ width: 160 }}>ТМЦ</th>
-                <th style={{ width: 90 }}>Тип ТМЦ</th>
-                <th style={{ width: 60 }}>Ед.</th>
+                <th style={{ width: 140 }}>Элемент</th>
+                <th style={{ width: 130 }}>Подэлемент</th>
+                <th style={{ width: 170 }}>Операция</th>
+                <th style={{ width: 90 }}>ВВ</th>
+                <th style={{ width: 70 }}>Период, ч</th>
+                <th style={{ width: 130 }}>Профессия</th>
+                <th style={{ width: 60 }}>Разряд</th>
+                <th style={{ width: 50 }} title="Количество исполнителей">Чел</th>
+                <th style={{ width: 60 }}>Норм-ч</th>
+                <th style={{ width: 60 }} title="Трудоёмкость = Норм-ч × Чел">Труд</th>
+                <th style={{ width: 140 }}>ТМЦ</th>
+                <th style={{ width: 80 }}>Тип ТМЦ</th>
+                <th style={{ width: 50 }}>Ед.</th>
                 <th style={{ width: 60 }}>Кол-во</th>
                 <th style={{ width: 30 }}></th>
               </tr>
@@ -373,7 +511,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
             <tbody>
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={12} className="muted small">
+                  <td colSpan={15} className="muted small">
                     Нет строк. Добавьте «+ строка» либо привяжите ВВ
                     (вкладка «ВВ»). Справочники операций, специальностей и
                     стандартных операций — через «Загрузить».
@@ -406,6 +544,17 @@ export function ModelCard({ modelId }: { modelId: string }) {
                           upsert(modelId, {
                             id: r.id,
                             component: e.target.value,
+                          })
+                        }
+                      />
+                    </td>
+                    <td>
+                      <input
+                        value={r.subcomponent ?? ''}
+                        onChange={(e) =>
+                          upsert(modelId, {
+                            id: r.id,
+                            subcomponent: e.target.value,
                           })
                         }
                       />
@@ -494,12 +643,57 @@ export function ModelCard({ modelId }: { modelId: string }) {
                     <td>
                       <input
                         type="number"
+                        step="1"
+                        min="1"
+                        value={r.workers ?? ''}
+                        title="Количество исполнителей операции"
+                        onChange={(e) => {
+                          const w = e.target.value
+                            ? parseInt(e.target.value, 10)
+                            : undefined;
+                          const lh = r.laborHours;
+                          upsert(modelId, {
+                            id: r.id,
+                            workers: w,
+                            totalLaborHours:
+                              typeof w === 'number' && typeof lh === 'number'
+                                ? Math.round(w * lh * 100) / 100
+                                : r.totalLaborHours,
+                          });
+                        }}
+                      />
+                    </td>
+                    <td>
+                      <input
+                        type="number"
                         step="0.1"
                         value={r.laborHours ?? ''}
+                        onChange={(e) => {
+                          const lh = e.target.value
+                            ? parseFloat(e.target.value)
+                            : undefined;
+                          const w = r.workers;
+                          upsert(modelId, {
+                            id: r.id,
+                            laborHours: lh,
+                            totalLaborHours:
+                              typeof lh === 'number' && typeof w === 'number'
+                                ? Math.round(lh * w * 100) / 100
+                                : r.totalLaborHours,
+                          });
+                        }}
+                      />
+                    </td>
+                    <td>
+                      <input
+                        type="number"
+                        step="0.1"
+                        value={r.totalLaborHours ?? ''}
+                        title="Трудоёмкость = Норм-ч × Чел (можно править вручную)"
                         onChange={(e) =>
                           upsert(modelId, {
                             id: r.id,
-                            laborHours: e.target.value
+                            totalLaborHours: e.target.value
                               ? parseFloat(e.target.value)
                               : undefined,
                           })

@@ -94,6 +94,49 @@ export interface AiProvider {
    * Наименование операции, Вид ТОиР, Норма времени, Количество
    * исполнителей, Профессия/Квалификация, Трудоёмкость, ТМЦ/кол./ед.
    */
+  /**
+   * Этап 3 ручного workflow (промпт нач-ка): «Состав». Извлекает из текста
+   * документа и/или общих знаний типовой состав элементов и подэлементов.
+   * Каждый элемент/подэлемент — отдельной строкой (по правилам нач-ка:
+   * существительное в им.падеже ед.числе, без крепежа — гайки/шайбы/болты
+   * и т.п. в состав не включаем).
+   */
+  fillElementsAndSubelements(input: {
+    model: Pick<EquipmentModel, 'className' | 'subclassName' | 'normalizedCode' | 'rawCode'>;
+    docText?: string;
+  }): Promise<
+    Array<{
+      component: string;
+      subcomponent?: string;
+      confidence?: number;
+    }>
+  >;
+
+  /**
+   * Этап 4 ручного workflow (промпт нач-ка): «Операции». На вход — список
+   * имеющихся элементов/подэлементов (component/subcomponent), на выход —
+   * операции по каждому, по правилам нач-ка:
+   *  - «Демонтаж» вместо «снятие/удаление»; «Монтаж» вместо «установка»;
+   *  - «Замена» = «Демонтаж» + «Монтаж» (две строки);
+   *  - всегда обеспечиваем пару Демонтаж↔Монтаж для каждого элемента/
+   *    подэлемента;
+   *  - дубликаты строк удаляем.
+   */
+  fillOperationsForElements(input: {
+    model: Pick<EquipmentModel, 'className' | 'subclassName' | 'normalizedCode' | 'rawCode'>;
+    components: Array<{ component: string; subcomponent?: string }>;
+    operationsRef?: string[];
+    docText?: string;
+  }): Promise<
+    Array<{
+      component: string;
+      subcomponent?: string;
+      operation: string;
+      workDescription?: string;
+      confidence?: number;
+    }>
+  >;
+
   fillTechCardByTemplate(input: {
     model: Pick<EquipmentModel, 'className' | 'subclassName' | 'normalizedCode' | 'rawCode'>;
     actions: Array<{ id: string; name: string; periodHours?: number }>;
@@ -143,6 +186,12 @@ export const noopAiProvider: AiProvider = {
     return [];
   },
   async fillTechCardByTemplate() {
+    return [];
+  },
+  async fillElementsAndSubelements() {
+    return [];
+  },
+  async fillOperationsForElements() {
     return [];
   },
 };

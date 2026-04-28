@@ -651,4 +651,197 @@ ${fewShot ? 'Эталон оформления (реальные строки и
       }))
       .slice(0, 60);
   },
+
+  async fillElementsAndSubelements(input) {
+    const code = input.model.normalizedCode || input.model.rawCode || '';
+    const cacheKey =
+      'elements:' +
+      fingerprint(
+        code,
+        input.model.className,
+        input.model.subclassName,
+        (input.docText ?? '').length,
+      );
+    const docHint = input.docText
+      ? input.docText.slice(0, 8000)
+      : '';
+    const system =
+      'Ты инженер ТОиР. Сформируй СОСТАВ оборудования: основные элементы и ' +
+      'подэлементы. Каждый — отдельной строкой. ' +
+      'СТРОГИЕ ПРАВИЛА (от заказчика): ' +
+      '(1) "Элемент" — крупный съёмный узел/система: например "Электродвигатель", ' +
+      '"Система смазки", "Редуктор", "Шкаф управления". ' +
+      '(2) "Подэлемент" — более мелкая деталь, входящая в состав элемента: ' +
+      'например "Подшипник" (в "Электродвигатель"), "Манжета" (в "Редуктор"). ' +
+      '(3) Каждый элемент и подэлемент — в отдельной строке. ' +
+      '(4) Если элемент состоит из 1 элемента без подэлементов — поле ' +
+      'subcomponent оставь пустым. ' +
+      '(5) НЕ включай в состав крепёж: гайки, шайбы, винты, шпильки, хомуты, ' +
+      'болты, штифты, шпонки. ' +
+      '(6) Каждое наименование — существительное в ИМЕНИТЕЛЬНОМ падеже ' +
+      'ЕДИНСТВЕННОГО числа. Если из нескольких слов — сначала существительное, ' +
+      'затем определения (например: "Подшипник радиальный", "Уплотнение торцовое"). ' +
+      '(7) Слова не сокращай и не заменяй похожими по смыслу. ' +
+      '(8) Если данных нет — лучше меньше строк, но достоверных. ' +
+      '(9) НЕ выдумывай узлы, которых у оборудования этого типа не бывает. ' +
+      'Возвращай ТОЛЬКО json: {"rows":[{"component":"…","subcomponent":"…",' +
+      '"confidence":0.0-1.0}]}.';
+    const user = `Модель: ${code}
+Класс: ${input.model.className ?? '—'}
+Подкласс: ${input.model.subclassName ?? '—'}${docHint ? '\n\nТекст документа (выдержки):\n' + docHint : ''}
+
+Сформируй состав. Минимум 6 строк (если данных хватает), максимум 30.`;
+    type Row = {
+      component?: string;
+      subcomponent?: string;
+      confidence?: number;
+    };
+    type Out = { rows?: Row[] };
+    const result = await callOpenAI<Out>(cacheKey, {
+      system,
+      user,
+      maxTokens: 1500,
+      model: 'quality',
+      isEmpty: (v) => {
+        const rows = (v as Out | undefined)?.rows;
+        return !rows || rows.length === 0;
+      },
+    });
+    if (!result?.rows) return [];
+    return result.rows
+      .filter((x) => x.component && x.component.trim())
+      .map((x) => ({
+        component: x.component!.trim(),
+        subcomponent: x.subcomponent?.trim() || undefined,
+        confidence:
+          typeof x.confidence === 'number' ? x.confidence : undefined,
+      }))
+      .slice(0, 60);
+  },
+
+  async fillOperationsForElements(input) {
+    const code = input.model.normalizedCode || input.model.rawCode || '';
+    const compKey = input.components
+      .map((c) => `${c.component}|${c.subcomponent ?? ''}`)
+      .join(';');
+    const cacheKey =
+      'ops4elements:' +
+      fingerprint(
+        code,
+        input.model.className,
+        input.model.subclassName,
+        compKey,
+      );
+    const opsList = (input.operationsRef ?? [])
+      .slice(0, 60)
+      .map((o) => `"${o}"`)
+      .join(',');
+    const docHint = input.docText
+      ? input.docText.slice(0, 6000)
+      : '';
+    const system =
+      'Ты инженер ТОиР. Для заданных Элементов/Подэлементов сформируй список ' +
+      'ОПЕРАЦИЙ ТОиР, по строгим правилам заказчика: ' +
+      '(1) Каждая операция — отдельной строкой; для нескольких операций на ' +
+      'один элемент дублируй элемент/подэлемент в каждой строке. ' +
+      '(2) Операцию по снятию/демонтажу элемента ВСЕГДА называй "Демонтаж". ' +
+      '(3) Операцию по установке/монтажу — ВСЕГДА "Монтаж". ' +
+      '(4) Если по элементу/подэлементу есть "Демонтаж" — обязательно должен ' +
+      'быть "Монтаж", и наоборот. Если одного из них нет — добавь сам. ' +
+      '(5) Операцию "Замена" ВСЕГДА разбивай на две: "Демонтаж" + "Монтаж". ' +
+      '(6) ВСЕГДА добавляй пару "Демонтаж"+"Монтаж" для каждого элемента и ' +
+      'подэлемента (даже если в источнике их нет). ' +
+      '(7) Кроме Демонтаж/Монтаж добавляй типовые операции ТОиР, применимые ' +
+      'к узлу: Осмотр, Смазка, Регулировка, Проверка, Чистка, Диагностика. ' +
+      '(8) workDescription — краткое содержание (≤10 слов), без воды. ' +
+      '(9) Дубликаты строк (полностью одинаковые) удалять. ' +
+      '(10) Слова в operation не сокращай и не заменяй синонимами. ' +
+      'Возвращай ТОЛЬКО json: {"rows":[{"component":"…","subcomponent":"…",' +
+      '"operation":"…","workDescription":"…","confidence":0.0-1.0}]}.';
+    const compsJson = JSON.stringify(input.components);
+    const user = `Модель: ${code}
+Класс: ${input.model.className ?? '—'}
+Подкласс: ${input.model.subclassName ?? '—'}
+Состав (JSON): ${compsJson}
+${opsList ? `Справочник операций (приоритет — выбирать из них): [${opsList}]` : ''}${docHint ? '\n\nТекст документа (выдержки):\n' + docHint : ''}
+
+Сформируй полный список операций (минимум 2 строки на каждый элемент/подэлемент: Демонтаж + Монтаж + типовые ТОиР).`;
+    type Row = {
+      component?: string;
+      subcomponent?: string;
+      operation?: string;
+      workDescription?: string;
+      confidence?: number;
+    };
+    type Out = { rows?: Row[] };
+    const result = await callOpenAI<Out>(cacheKey, {
+      system,
+      user,
+      maxTokens: 3500,
+      model: 'quality',
+      isEmpty: (v) => {
+        const rows = (v as Out | undefined)?.rows;
+        return !rows || rows.length === 0;
+      },
+    });
+    if (!result?.rows) return [];
+    const out = result.rows
+      .filter((x) => x.component && x.operation)
+      .map((x) => ({
+        component: x.component!.trim(),
+        subcomponent: x.subcomponent?.trim() || undefined,
+        operation: x.operation!.trim(),
+        workDescription: x.workDescription?.trim() || undefined,
+        confidence:
+          typeof x.confidence === 'number' ? x.confidence : undefined,
+      }));
+    // Пост-обработка по правилам заказчика: гарантируем пару Демонтаж↔Монтаж
+    // и убираем дубликаты.
+    const seen = new Set<string>();
+    const dedup: typeof out = [];
+    for (const r of out) {
+      const k = `${r.component}|${r.subcomponent ?? ''}|${r.operation.toLowerCase()}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      dedup.push(r);
+    }
+    // Гарантируем пару.
+    const have = new Set(
+      dedup.map(
+        (r) => `${r.component}|${r.subcomponent ?? ''}|${r.operation.toLowerCase()}`,
+      ),
+    );
+    const additions: typeof out = [];
+    const compsByKey = new Map<string, { component: string; subcomponent?: string }>();
+    for (const r of dedup) {
+      const cKey = `${r.component}|${r.subcomponent ?? ''}`;
+      if (!compsByKey.has(cKey))
+        compsByKey.set(cKey, {
+          component: r.component,
+          subcomponent: r.subcomponent,
+        });
+    }
+    for (const c of compsByKey.values()) {
+      const baseKey = `${c.component}|${c.subcomponent ?? ''}|`;
+      if (!have.has(baseKey + 'демонтаж')) {
+        additions.push({
+          component: c.component,
+          subcomponent: c.subcomponent,
+          operation: 'Демонтаж',
+          workDescription: undefined,
+          confidence: 0.9,
+        });
+      }
+      if (!have.has(baseKey + 'монтаж')) {
+        additions.push({
+          component: c.component,
+          subcomponent: c.subcomponent,
+          operation: 'Монтаж',
+          workDescription: undefined,
+          confidence: 0.9,
+        });
+      }
+    }
+    return [...dedup, ...additions].slice(0, 200);
+  },
 };
