@@ -328,7 +328,21 @@ export function ModelCard({ modelId }: { modelId: string }) {
       const t = cleanNameText(input);
       if (!t) return '';
       const words = t.split(' ').map((w) => expandWord(w));
-      return cap(words.join(' ').toLowerCase());
+      const cleaned = cap(words.join(' ').toLowerCase());
+      // п.8.4 ТЗ + созвон: если есть совпадение со справочником стандартных
+      // операций — берём ровно ту формулировку из справочника, чтобы все
+      // строки приводились к единому виду.
+      if (ops.length > 0) {
+        const lc = cleaned.toLowerCase();
+        const exact = ops.find((o) => o.name.toLowerCase() === lc);
+        if (exact) return exact.name;
+        const startsWith = ops.find((o) => lc.startsWith(o.name.toLowerCase() + ' '));
+        if (startsWith) {
+          const tail = cleaned.slice(startsWith.name.length);
+          return startsWith.name + tail;
+        }
+      }
+      return cleaned;
     };
     const normTmc = (input: string): string => {
       const t = cleanNameText(input);
