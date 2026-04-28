@@ -923,6 +923,18 @@ export function ModelCard({ modelId }: { modelId: string }) {
                 }
                 hint="интенсивность отказов, 1/ч"
               />
+              <Stat
+                label="Кг"
+                value={
+                  stats.mtbfHours != null && stats.mttrHours != null
+                    ? (
+                        stats.mtbfHours /
+                        (stats.mtbfHours + stats.mttrHours)
+                      ).toFixed(4)
+                    : '—'
+                }
+                hint="коэффициент готовности = MTBF / (MTBF + MTTR)"
+              />
             </div>
             <table className="models">
               <thead>
