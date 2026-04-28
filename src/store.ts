@@ -12,7 +12,7 @@ import { normalizeModelCode } from './domain/normalize';
 import type { ClassificationRow } from './parsers/classification';
 import type { ActionsImportRow } from './parsers/actions';
 import type { CharsImportRow } from './parsers/charsImport';
-import type { ReferenceData } from './domain/types';
+import type { ReferenceData, Characteristic } from './domain/types';
 import type { ReferenceKind } from './parsers/references';
 import { parseValue } from './domain/units';
 import {
@@ -577,7 +577,7 @@ export const useStore = create<Store>()(
     }),
     {
       name: 'nsi_store_v1',
-      version: 4,
+      version: 5,
       // v1→v2: подсыпаем дефолтный классификатор «Простоев.Нет», если в
       // сохранённом стейте классификатор пуст.
       // v2→v3: если иерархия пустая (был пустой seed) — подсыпаем демо-иерархию
@@ -619,6 +619,54 @@ export const useStore = create<Store>()(
         if (refsEmpty) {
           next = { ...next, references: SEED_REFERENCES };
         }
+        // v4→v5: дополняем модели полным набором характеристик из «Результирующий
+        // файл Модели с характ. ист. полный.xlsx». Применяем только к моделям
+        // seed (где источник характеристик 'document' и нет lockedByExpert) —
+        // пользовательские правки не трогаем.
+        const seedModels = buildSeedHierarchy().models;
+        const seedCharsByCode = new Map<string, Characteristic[]>();
+        for (const sm of seedModels) {
+          if (sm.characteristics?.length && sm.normalizedCode) {
+            seedCharsByCode.set(sm.normalizedCode, sm.characteristics);
+          }
+        }
+        const curModels = next.models ?? [];
+        const expanded = curModels.map((m) => {
+          if (!m.normalizedCode) return m;
+          const seedChars = seedCharsByCode.get(m.normalizedCode);
+          if (!seedChars) return m;
+          const existing = m.characteristics ?? [];
+          // Если в модели уже есть зафиксированные значения — оставляем их
+          // и только добавляем новые ключи.
+          const lockedKeys = new Set(
+            existing
+              .filter((c) => c.lockedByExpert)
+              .map((c) => c.key.toLowerCase()),
+          );
+          const isUserModified = existing.some(
+            (c) => c.lockedByExpert || c.source === 'manual',
+          );
+          if (isUserModified) {
+            // Только дополняем недостающие ключи.
+            const haveKeys = new Set(existing.map((c) => c.key.toLowerCase()));
+            const extra = seedChars.filter(
+              (c) => !haveKeys.has(c.key.toLowerCase()),
+            );
+            if (!extra.length) return m;
+            return { ...m, characteristics: [...existing, ...extra] };
+          }
+          // Иначе заменяем целиком.
+          const merged = seedChars.map((c) => {
+            if (lockedKeys.has(c.key.toLowerCase())) {
+              return existing.find(
+                (e) => e.key.toLowerCase() === c.key.toLowerCase(),
+              )!;
+            }
+            return c;
+          });
+          return { ...m, characteristics: merged };
+        });
+        next = { ...next, models: expanded };
         return next as Partial<Store>;
       },
       storage: createJSONStorage(() => localStorage, {

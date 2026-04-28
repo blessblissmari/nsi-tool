@@ -19,6 +19,15 @@ import {
   PROSTOEV_CHARS_BY_MODEL,
   PROSTOEV_REFERENCES,
 } from './prostoevRefs';
+import seedModelsFullCharsJson from './seedModelsFullChars.json';
+
+interface SeedFullCharsRow {
+  className: string | null;
+  subclassName: string | null;
+  code: string;
+  chars: Array<{ key: string; value: string; unit: string | null }>;
+}
+const SEED_FULL_CHARS = seedModelsFullCharsJson as SeedFullCharsRow[];
 
 /** Справочники «Простоев.Нет» по умолчанию (п.6.4–6.5 ТЗ). */
 export const SEED_REFERENCES: ReferenceData = PROSTOEV_REFERENCES;
@@ -293,10 +302,46 @@ export function buildSeedHierarchy(): {
     }));
     actionsByCode.set(row.model, list);
   }
-  // Приоритетные характеристики на каждую модель из «Результирующий файл
-  // Модели с характ. ист. по классификатору.xlsx».
+  // Полные характеристики на каждую модель из «Результирующий файл Модели с
+  // характ. ист. полный.xlsx» (5–21 хар-к на модель). Приоритет берём из
+  // классификатора Простоев.Нет.
   const charsByCode = new Map<string, Characteristic[]>();
+  // Сначала индекс приоритетных ключей по классу/подклассу — для пометки
+  // isPriority/priorityOrder.
+  const priorityIndex = new Map<string, Map<string, number>>();
+  for (const cls of PROSTOEV_CLASSIFIER.classes) {
+    const map = new Map<string, number>();
+    cls.priorityChars?.forEach((p, i) => map.set(p.key.toLowerCase(), i));
+    for (const sub of cls.subclasses) {
+      sub.priorityChars?.forEach((p, i) => {
+        if (!map.has(p.key.toLowerCase())) map.set(p.key.toLowerCase(), i + 100);
+      });
+    }
+    priorityIndex.set(cls.name, map);
+  }
+  for (const row of SEED_FULL_CHARS) {
+    const pri = row.className ? priorityIndex.get(row.className) : undefined;
+    const list: Characteristic[] = row.chars.map((c, i) => {
+      const pIdx = pri?.get(c.key.toLowerCase());
+      const num = Number(String(c.value).replace(',', '.'));
+      return {
+        id: `${row.code}-ch-${i + 1}`,
+        key: c.key,
+        valueRaw: String(c.value),
+        valueNum: Number.isFinite(num) ? num : undefined,
+        unit: c.unit ?? undefined,
+        targetUnit: c.unit ?? undefined,
+        isPriority: pIdx !== undefined,
+        priorityOrder: pIdx,
+        source: 'document' as const,
+      };
+    });
+    charsByCode.set(row.code, list);
+  }
+  // Дополним моделями, у которых в «полном» файле нет записи — берём из
+  // приоритетного источника (для совместимости).
   for (const row of PROSTOEV_CHARS_BY_MODEL) {
+    if (charsByCode.has(row.model)) continue;
     const list: Characteristic[] = row.chars.map((c, i) => ({
       id: `${row.model}-ch-${i + 1}`,
       key: c.key,
