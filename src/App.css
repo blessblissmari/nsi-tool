@@ -747,3 +747,31 @@ select:focus {
 .link-btn:hover {
   text-decoration: underline;
 }
+
+/* Подсветка строк техкарты по источнику данных (созвон 28.04.2026). */
+table.models tr.src-document > td { background: #eef5ff; }
+table.models tr.src-web      > td { background: #f5e7fa; }
+table.models tr.src-analog   > td { background: #fff8d6; }
+table.models tr.src-ai       > td { background: #e7f9ee; }
+table.models tr.src-manual   > td { background: #ffffff; }
+table.models tr.src-classifier > td { background: #fff0e6; }
+
+/* Чип «Источник» внутри строки. */
+.src-chip {
+  font-size: 11px;
+  padding: 1px 6px;
+  border: 1px solid #ccc;
+  display: inline-block;
+}
+.src-chip.src-document { background: #cfe1ff; }
+.src-chip.src-web      { background: #ddd0ff; }
+.src-chip.src-analog   { background: #f3e6a0; }
+.src-chip.src-ai       { background: #b9ecc8; }
+.src-chip.src-manual   { background: #f3f3f3; }
+.src-chip.src-classifier { background: #ffd9bf; }
+
+/* Подсветка нарушения правил нормализации в Элемент/Подэлемент. */
+table.models input.warn {
+  background: #fff0e6;
+  border-color: #d97706;
+}

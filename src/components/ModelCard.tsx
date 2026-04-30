@@ -8,7 +8,6 @@ import {
 } from '../domain/uiSettings';
 import {
   normalizeModelCode,
-  normalizeOperation,
   normalizeCharName,
   normalizeUnit,
 } from '../domain/normalize';
@@ -59,7 +58,8 @@ function newId(p: string) {
 }
 
 /**
- * Бейдж расширения файла для документов на ТОР.
+ * Бейдж расширения файла для документов на ТОР (п.6.1:
+ * «Реализовано визуальное цветовое обозначение типов файлов»).
  * Цвета подобраны под основные типы документов в ТОиР.
  */
 function fileExt(name: string): string {
@@ -211,23 +211,137 @@ export function ModelCard({ modelId }: { modelId: string }) {
     const refs = useStore((s) => s.references);
     const upsert = useStore((s) => s.upsertTechCardRow);
     const del = useStore((s) => s.deleteTechCardRow);
+    const setTechCard = useStore((s) => s.setTechCard);
     const [aiBusy, setAiBusy] = useState(false);
     const [aiErr, setAiErr] = useState('');
+    /**
+     * Фильтр по виду воздействия (ВВ): техкарта подстраивается под выбранный
+     * вид (например, «только ТО-1»). По умолчанию — все ВВ.
+     * Спец-значения: '' = все · '__none__' = строки без привязки к ВВ.
+     * Не мутирует store — это только UI-фильтр (созвон 28.04.2026: «только то1»).
+     */
+    const [actionFilter, setActionFilter] = useState<string>('');
     if (!m) return null;
-    const rows = m.techCard ?? [];
-    const tmcKindLabel = (k?: 'material' | 'spare') =>
-      k === 'material' ? 'материал' : k === 'spare' ? 'запчасть' : '—';
+    const allRows = m.techCard ?? [];
+    const rows =
+      actionFilter === ''
+        ? allRows
+        : actionFilter === '__none__'
+          ? allRows.filter((r) => !r.actionId)
+          : allRows.filter((r) => r.actionId === actionFilter);
     const ops = refs.operations;
     const specs = refs.specialties;
     const acts = m.actions ?? [];
     const hasKey = !!getApiKey();
 
+    // ───── Нормализация имён внутри техкарты (правила из созвона 28.04.2026) ─────
+    // 1) Если несколько слов — первое всегда существительное.
+    // 2) Элемент / Подэлемент — в единственном числе и именительном падеже.
+    // 3) Слова не сокращать и не заменять синонимами.
+    // Дополнительно: «Не вноси как Элемент/Подэлемент крепёж — гайки, шайбы,
+    // винты, шпильки, хомуты, болты, штифты, шпонки.»
+    const FORBIDDEN_FASTENERS = [
+      'гайка', 'шайба', 'винт', 'шпилька', 'хомут', 'болт', 'штифт', 'шпонка',
+    ];
+    const ABBREV_EXPANSIONS: Record<string, string> = {
+      кл: 'клапан',
+      'эл/двиг': 'электродвигатель',
+      'эл.двиг': 'электродвигатель',
+      эл: 'электро',
+      цил: 'цилиндр',
+      тр: 'труба',
+      трубопр: 'трубопровод',
+      возд: 'воздух',
+      дв: 'двигатель',
+      редукт: 'редуктор',
+      подш: 'подшипник',
+      подшипн: 'подшипник',
+      кпп: 'коробка передач',
+    };
+    const SYNONYM_TO_CANON: Record<string, string> = {
+      моторчик: 'двигатель',
+      двигун: 'двигатель',
+      кулак: 'кулачок',
+      колесико: 'колесо',
+      колёсико: 'колесо',
+    };
+    const isLikelyAdjective = (w: string) =>
+      /(?:ный|ная|ное|ные|ая|ое|ые|ой|ий|яя|ее|ие|ьный|ьная|ьное|ьные|ний|няя|нее|ние|ского|ская|ское|ские|зной|зная)$/u.test(
+        w,
+      );
+    const toSingularNominative = (w: string): string => {
+      if (!w || w.length <= 3) return w;
+      if (/нки$/u.test(w)) return w.slice(0, -1) + 'а';
+      if (/тки$/u.test(w)) return w.slice(0, -1) + 'а';
+      if (/[бвгджзклмнпрстфхцчшщ]ы$/u.test(w)) return w.slice(0, -1);
+      if (/[бвгджзклмнпрстфхцчшщ]и$/u.test(w)) return w.slice(0, -1) + 'ь';
+      if (/иями$/u.test(w)) return w.slice(0, -4) + 'ие';
+      if (/[еа]ния$/u.test(w)) return w.slice(0, -1) + 'е';
+      if (/ии$/u.test(w)) return w.slice(0, -1) + 'е';
+      if (/ями$/u.test(w)) return w.slice(0, -3) + 'ь';
+      if (/ами$/u.test(w)) return w.slice(0, -3) + 'а';
+      return w;
+    };
+    const cleanNameText = (s: string): string => {
+      // eslint-disable-next-line no-control-regex
+      const ctrl = /[\u0000-\u001F\u007F]/g;
+      return String(s ?? '')
+        .replace(ctrl, '')
+        .replace(/\s+/g, ' ')
+        .replace(/\s*[-–—]\s*/g, '-')
+        .trim();
+    };
+    const cap = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);
+    const expandWord = (w: string): string => {
+      const lower = w.toLowerCase().replace(/[.,;]+$/u, '');
+      if (ABBREV_EXPANSIONS[lower]) return ABBREV_EXPANSIONS[lower];
+      if (SYNONYM_TO_CANON[lower]) return SYNONYM_TO_CANON[lower];
+      return w;
+    };
+    const normElement = (input: string): { text: string; warnings: string[] } => {
+      const warnings: string[] = [];
+      const t = cleanNameText(input);
+      if (!t) return { text: '', warnings };
+      let words = t.split(' ').filter(Boolean).map((w) => expandWord(w.toLowerCase()));
+      words = words.map((w) => (isLikelyAdjective(w) ? w : toSingularNominative(w)));
+      if (words.length > 1) {
+        const idx = words.findIndex((w) => !isLikelyAdjective(w));
+        if (idx > 0) {
+          const noun = words[idx];
+          words = [noun, ...words.filter((_, i) => i !== idx)];
+        }
+      }
+      const head = (words[0] ?? '').toLowerCase();
+      if (FORBIDDEN_FASTENERS.includes(head)) {
+        warnings.push(
+          `«${head}» нельзя использовать как Элемент/Подэлемент. Укажите узел, к которому относится крепёж.`,
+        );
+      }
+      return { text: cap(words.join(' ')), warnings };
+    };
+    const normOperation = (input: string): string => {
+      const t = cleanNameText(input);
+      if (!t) return '';
+      const words = t.split(' ').map((w) => expandWord(w));
+      return cap(words.join(' ').toLowerCase());
+    };
+    const normTmc = (input: string): string => {
+      const t = cleanNameText(input);
+      if (!t) return '';
+      const words = t.split(' ').map((w) => expandWord(w));
+      return words.join(' ');
+    };
+
+    // При активном фильтре по ВВ новая строка сразу получает этот actionId,
+    // чтобы она осталась видимой в текущем виде («техкарта подстраивается под вид»).
+    const filterActionId =
+      actionFilter && actionFilter !== '__none__' ? actionFilter : undefined;
     const addBlankRow = () =>
       upsert(modelId, {
         component: '',
         subcomponent: '',
         operation: '',
-        actionId: undefined,
+        actionId: filterActionId,
         specialty: '',
         qualification: '',
         laborHours: undefined,
@@ -238,22 +352,73 @@ export function ModelCard({ modelId }: { modelId: string }) {
         tmcQty: undefined,
         source: 'manual',
       });
+    const addAggregateRow = () =>
+      upsert(modelId, {
+        isAggregate: true,
+        component: '',
+        subcomponent: '',
+        operation: '',
+        actionId: filterActionId,
+        source: 'manual',
+      });
+    const sortByElement = () => {
+      const sorted = [...allRows].sort((a, b) => {
+        const ea = (a.isAggregate ? '\uffff' : (a.component ?? '')).toLocaleLowerCase('ru');
+        const eb = (b.isAggregate ? '\uffff' : (b.component ?? '')).toLocaleLowerCase('ru');
+        if (ea !== eb) return ea.localeCompare(eb, 'ru');
+        const sa = (a.subcomponent ?? '').toLocaleLowerCase('ru');
+        const sb = (b.subcomponent ?? '').toLocaleLowerCase('ru');
+        if (sa !== sb) return sa.localeCompare(sb, 'ru');
+        return (a.operation ?? '').localeCompare(b.operation ?? '', 'ru');
+      });
+      setTechCard(modelId, sorted);
+    };
+    const dedupeRows = () => {
+      const seen = new Set<string>();
+      const out: typeof allRows = [];
+      for (const r of allRows) {
+        const key = [
+          r.isAggregate ? 'AGG' : (r.component ?? '').trim().toLowerCase(),
+          (r.subcomponent ?? '').trim().toLowerCase(),
+          (r.operation ?? '').trim().toLowerCase(),
+          (r.specialty ?? '').trim().toLowerCase(),
+          (r.qualification ?? '').trim().toLowerCase(),
+          (r.tmcName ?? '').trim().toLowerCase(),
+          (r.tmcUnit ?? '').trim().toLowerCase(),
+        ].join('|');
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(r);
+      }
+      const removed = allRows.length - out.length;
+      setTechCard(modelId, out);
+      setAiErr(removed > 0 ? `Удалено дублей: ${removed}.` : 'Дублей не найдено.');
+    };
 
     /**
-     * Нормализация всех операций и единиц измерения в техкарте по правилам
-     * п.8.4 (операции) и п.8.6 (ед.изм.).
+     * Нормализация всех имён в техкарте по правилам из созвона 28.04.2026:
+     *   1. Первое слово — существительное.
+     *   2. Элемент / Подэлемент — ед.число + им.падеж.
+     *   3. Не сокращать и не подменять синонимами.
+     *   + Запрет крепежа (гайки/шайбы/винты/...) как Элемент/Подэлемент.
+     * Плюс старые правила п.8.4 (операции) и п.8.6 (ед.изм.).
      */
     const normalizeAllRows = () => {
       let touched = 0;
-      for (const r of rows) {
-        const newOp = r.operation ? normalizeOperation(r.operation) : r.operation;
-        const newComp = r.component ? normalizeCharName(r.component) : r.component;
-        const newSub = r.subcomponent ? normalizeCharName(r.subcomponent) : r.subcomponent;
+      const warns: string[] = [];
+      for (const r of allRows) {
+        const elem = r.component ? normElement(r.component) : { text: '', warnings: [] };
+        const sub = r.subcomponent ? normElement(r.subcomponent) : { text: '', warnings: [] };
+        const newOp = r.operation ? normOperation(r.operation) : r.operation;
+        const newTmc = r.tmcName ? normTmc(r.tmcName) : r.tmcName;
         const newUnit = r.tmcUnit ? normalizeUnit(r.tmcUnit) : r.tmcUnit;
+        const newComp = r.component ? elem.text : r.component;
+        const newSub = r.subcomponent ? sub.text : r.subcomponent;
         if (
           newOp !== r.operation ||
           newComp !== r.component ||
           newSub !== r.subcomponent ||
+          newTmc !== r.tmcName ||
           newUnit !== r.tmcUnit
         ) {
           upsert(modelId, {
@@ -261,12 +426,15 @@ export function ModelCard({ modelId }: { modelId: string }) {
             operation: newOp ?? '',
             component: newComp ?? '',
             subcomponent: newSub ?? '',
+            tmcName: newTmc ?? '',
             tmcUnit: newUnit ?? '',
           });
           touched++;
         }
+        warns.push(...elem.warnings, ...sub.warnings);
       }
-      setAiErr(touched ? `Нормализовано: ${touched}` : 'Все строки уже нормализованы.');
+      const head = touched ? `Нормализовано: ${touched}` : 'Все строки уже нормализованы.';
+      setAiErr(warns.length ? `${head}. Замечаний: ${warns.length}.` : head);
     };
 
     /** Этап 3 ручного workflow: «Состав» (Элемент / Подэлемент). */
@@ -455,7 +623,44 @@ export function ModelCard({ modelId }: { modelId: string }) {
             flexWrap: 'wrap',
           }}
         >
+          <label className="muted small" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            ВВ:
+            <select
+              value={actionFilter}
+              onChange={(e) => setActionFilter(e.target.value)}
+              title="Показать только строки выбранного вида воздействия. Техкарта подстраивается под выбранный вид (например, «только ТО-1»)."
+            >
+              <option value="">все</option>
+              {acts.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name}
+                  {a.periodHours ? ` · ${a.periodHours} ч` : ''}
+                </option>
+              ))}
+              <option value="__none__">— без привязки —</option>
+            </select>
+          </label>
           <button onClick={addBlankRow}>+ строка</button>
+          <button
+            onClick={addAggregateRow}
+            title="Добавить операцию на сам агрегат (без указания Элемент/Подэлемент)."
+          >
+            + на агрегат
+          </button>
+          <button
+            onClick={sortByElement}
+            disabled={rows.length === 0}
+            title="Сортировать строки по Элементу → Подэлементу → Операции."
+          >
+            ↕ по элементу
+          </button>
+          <button
+            onClick={dedupeRows}
+            disabled={rows.length === 0}
+            title="Удалить дубли по Элементу+Подэлементу+Операции+Профессии+ТМЦ."
+          >
+            ✂ убрать дубли
+          </button>
           <button
             onClick={fillElementsAi}
             disabled={aiBusy || !hasKey}
@@ -488,10 +693,10 @@ export function ModelCard({ modelId }: { modelId: string }) {
                 ? 'Укажите OpenAI ключ в «Настройках».'
                 : acts.length === 0
                   ? 'Добавьте хотя бы одно ВВ перед заполнением ИИ.'
-                  : 'Сгенерировать техкарту целиком по шаблону Простоев.Нет на основе класса/подкласса и списка ВВ.'
+                  : 'Сгенерировать техкарту целиком: ИИ ищет в интернете типовые операции и ТМЦ под класс/подкласс и список ВВ.'
             }
           >
-            {aiBusy ? '…ИИ работает' : '⚡ Всё сразу'}
+            {aiBusy ? '…ИИ работает' : '🌐 Поиск в интернете'}
           </button>
           <button
             onClick={normalizeAllRows}
@@ -499,7 +704,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
             title={
               rows.length === 0
                 ? 'Сначала добавьте строки в техкарту.'
-                : 'Нормализовать все наименования операций, элементов и единицы измерения.'
+                : 'Нормализовать все наименования: ед.число и им.падеж, первое слово — существительное, без сокращений; крепёж не вносится в Элемент/Подэлемент.'
             }
           >
             🪄 Нормализовать
@@ -515,7 +720,10 @@ export function ModelCard({ modelId }: { modelId: string }) {
             {fullscreen ? '⤤ К дереву' : '⛶ На весь экран'}
           </button>
           <span className="muted small">
-            {rows.length} строк{ops.length ? ` · справочник операций: ${ops.length}` : ''}
+            {actionFilter
+              ? `${rows.length} из ${allRows.length}`
+              : `${rows.length}`} строк
+            {ops.length ? ` · справочник операций: ${ops.length}` : ''}
             {specs.length ? ` · специальностей: ${specs.length}` : ''}
             {!ops.length && (
               <> · загрузите «Справочник операций.xlsx» для autocomplete</>
@@ -538,20 +746,18 @@ export function ModelCard({ modelId }: { modelId: string }) {
                 <th style={{ width: 70 }}>Период, ч</th>
                 <th style={{ width: 130 }}>Профессия</th>
                 <th style={{ width: 60 }}>Разряд</th>
-                <th style={{ width: 50 }} title="Количество исполнителей">Чел</th>
-                <th style={{ width: 60 }}>Норм-ч</th>
-                <th style={{ width: 60 }} title="Трудоёмкость = Норм-ч × Чел">Труд</th>
+                <th style={{ width: 70 }} title="Трудозатраты на отдельную профессию (чел/ч).">Трудозатр.,ч</th>
                 <th style={{ width: 140 }}>ТМЦ</th>
-                <th style={{ width: 80 }}>Тип ТМЦ</th>
                 <th style={{ width: 50 }}>Ед.</th>
                 <th style={{ width: 60 }}>Кол-во</th>
+                <th style={{ width: 80 }}>Источник</th>
                 <th style={{ width: 30 }}></th>
               </tr>
             </thead>
             <tbody>
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={15} className="muted small">
+                  <td colSpan={13} className="muted small">
                     Нет строк. Добавьте «+ строка» либо привяжите ВВ
                     (вкладка «ВВ»). Справочники операций, специальностей и
                     стандартных операций — через «Загрузить».
@@ -575,29 +781,51 @@ export function ModelCard({ modelId }: { modelId: string }) {
                 if (r.ppe) tipParts.push(`СИЗ: ${r.ppe}`);
                 if (r.safety) tipParts.push(`Безопасность: ${r.safety}`);
                 const rowTitle = tipParts.join('\n');
+                const elemWarn = r.component ? normElement(r.component).warnings.length > 0 : false;
+                const subWarn = r.subcomponent ? normElement(r.subcomponent).warnings.length > 0 : false;
                 return (
-                  <tr key={r.id} title={rowTitle || undefined}>
+                  <tr key={r.id} title={rowTitle || undefined} className={`src-${r.source}`}>
                     <td>
-                      <input
-                        value={r.component ?? ''}
-                        onChange={(e) =>
-                          upsert(modelId, {
-                            id: r.id,
-                            component: e.target.value,
-                          })
-                        }
-                      />
+                      {r.isAggregate ? (
+                        <span className="muted small" title="Операция на сам агрегат">⟨агрегат⟩</span>
+                      ) : (
+                        <input
+                          className={elemWarn ? 'warn' : undefined}
+                          value={r.component ?? ''}
+                          onChange={(e) =>
+                            upsert(modelId, {
+                              id: r.id,
+                              component: e.target.value,
+                            })
+                          }
+                          onBlur={(e) => {
+                            const norm = normElement(e.target.value);
+                            if (norm.text !== e.target.value)
+                              upsert(modelId, { id: r.id, component: norm.text });
+                          }}
+                        />
+                      )}
                     </td>
                     <td>
-                      <input
-                        value={r.subcomponent ?? ''}
-                        onChange={(e) =>
-                          upsert(modelId, {
-                            id: r.id,
-                            subcomponent: e.target.value,
-                          })
-                        }
-                      />
+                      {r.isAggregate ? (
+                        <span className="muted small">—</span>
+                      ) : (
+                        <input
+                          className={subWarn ? 'warn' : undefined}
+                          value={r.subcomponent ?? ''}
+                          onChange={(e) =>
+                            upsert(modelId, {
+                              id: r.id,
+                              subcomponent: e.target.value,
+                            })
+                          }
+                          onBlur={(e) => {
+                            const norm = normElement(e.target.value);
+                            if (norm.text !== e.target.value)
+                              upsert(modelId, { id: r.id, subcomponent: norm.text });
+                          }}
+                        />
+                      )}
                     </td>
                     <td>
                       <input
@@ -609,6 +837,11 @@ export function ModelCard({ modelId }: { modelId: string }) {
                             operation: e.target.value,
                           })
                         }
+                        onBlur={(e) => {
+                          const norm = normOperation(e.target.value);
+                          if (norm !== e.target.value)
+                            upsert(modelId, { id: r.id, operation: norm });
+                        }}
                       />
                     </td>
                     <td>
@@ -683,57 +916,18 @@ export function ModelCard({ modelId }: { modelId: string }) {
                     <td>
                       <input
                         type="number"
-                        step="1"
-                        min="1"
-                        value={r.workers ?? ''}
-                        title="Количество исполнителей операции"
-                        onChange={(e) => {
-                          const w = e.target.value
-                            ? parseInt(e.target.value, 10)
-                            : undefined;
-                          const lh = r.laborHours;
-                          upsert(modelId, {
-                            id: r.id,
-                            workers: w,
-                            totalLaborHours:
-                              typeof w === 'number' && typeof lh === 'number'
-                                ? Math.round(w * lh * 100) / 100
-                                : r.totalLaborHours,
-                          });
-                        }}
-                      />
-                    </td>
-                    <td>
-                      <input
-                        type="number"
                         step="0.1"
-                        value={r.laborHours ?? ''}
-                        onChange={(e) => {
-                          const lh = e.target.value
-                            ? parseFloat(e.target.value)
-                            : undefined;
-                          const w = r.workers;
-                          upsert(modelId, {
-                            id: r.id,
-                            laborHours: lh,
-                            totalLaborHours:
-                              typeof lh === 'number' && typeof w === 'number'
-                                ? Math.round(lh * w * 100) / 100
-                                : r.totalLaborHours,
-                          });
-                        }}
-                      />
-                    </td>
-                    <td>
-                      <input
-                        type="number"
-                        step="0.1"
-                        value={r.totalLaborHours ?? ''}
-                        title="Трудоёмкость = Норм-ч × Чел (можно править вручную)"
+                        value={r.totalLaborHours ?? r.laborHours ?? ''}
+                        title="Трудозатраты на отдельную профессию (чел/ч)."
                         onChange={(e) =>
                           upsert(modelId, {
                             id: r.id,
                             totalLaborHours: e.target.value
+                              ? parseFloat(e.target.value)
+                              : undefined,
+                            // Сохраняем «норма часов» совместимо со старыми данными
+                            // как ту же величину, чтобы экспорт не ломался.
+                            laborHours: e.target.value
                               ? parseFloat(e.target.value)
                               : undefined,
                           })
@@ -749,26 +943,13 @@ export function ModelCard({ modelId }: { modelId: string }) {
                             tmcName: e.target.value,
                           })
                         }
-                        title="Только материалы и запчасти. Инструмент исключается."
+                        onBlur={(e) => {
+                          const norm = normTmc(e.target.value);
+                          if (norm !== e.target.value)
+                            upsert(modelId, { id: r.id, tmcName: norm });
+                        }}
+                        title="Полное название ТМЦ (материалы и запчасти; инструмент исключается)."
                       />
-                    </td>
-                    <td>
-                      <select
-                        value={r.tmcKind ?? ''}
-                        onChange={(e) =>
-                          upsert(modelId, {
-                            id: r.id,
-                            tmcKind: (e.target.value || undefined) as
-                              | 'material'
-                              | 'spare'
-                              | undefined,
-                          })
-                        }
-                      >
-                        <option value="">—</option>
-                        <option value="material">материал</option>
-                        <option value="spare">запчасть</option>
-                      </select>
                     </td>
                     <td>
                       <input
@@ -797,9 +978,19 @@ export function ModelCard({ modelId }: { modelId: string }) {
                       />
                     </td>
                     <td>
+                      <span className={`src-chip src-${r.source}`} title="Источник строки">
+                        {r.source === 'document' ? 'документ'
+                          : r.source === 'web' ? 'интернет'
+                          : r.source === 'analog' ? 'аналог'
+                          : r.source === 'ai' ? 'ИИ'
+                          : r.source === 'classifier' ? 'классиф.'
+                          : 'вручную'}
+                      </span>
+                    </td>
+                    <td>
                       <button
                         className="btn-as-label"
-                        title={`Удалить (${tmcKindLabel(r.tmcKind)})`}
+                        title="Удалить строку"
                         onClick={() => del(modelId, r.id)}
                       >
                         ×
@@ -827,10 +1018,42 @@ export function ModelCard({ modelId }: { modelId: string }) {
             ))}
           </datalist>
         )}
-        <div className="muted small" style={{ marginTop: 6 }}>
-          Колонка «Тип ТМЦ» помечает только материалы и запчасти —
-          инструмент в спецификацию (BOM/APL) не попадает.
-        </div>
+        {rows.length > 0 && (() => {
+          const totals = new Map<string, number>();
+          let grand = 0;
+          for (const r of rows) {
+            const lh = r.totalLaborHours ?? r.laborHours;
+            if (typeof lh !== 'number') continue;
+            grand += lh;
+            const key = [
+              r.specialty || '—',
+              r.qualification ? ` ${r.qualification}` : '',
+            ].join('').trim();
+            totals.set(key, (totals.get(key) ?? 0) + lh);
+          }
+          if (totals.size === 0) return null;
+          const fmt = (n: number) => Math.round(n * 100) / 100;
+          return (
+            <div className="muted small" style={{ marginTop: 6 }}>
+              <strong>Суммарные трудозатраты:</strong>{' '}
+              {Array.from(totals.entries())
+                .map(([k, v]) => `${k}: ${fmt(v)} ч`)
+                .join(' · ')}
+              {' · итого '}
+              <strong>{fmt(grand)} ч</strong>
+            </div>
+          );
+        })()}
+        <details className="muted small" style={{ marginTop: 6 }}>
+          <summary>Правила нормализации (созвон 28.04.2026)</summary>
+          <ul style={{ margin: '4px 0 0 16px' }}>
+            <li>В Элемент/Подэлемент <strong>не вносим</strong> крепёж: гайки, шайбы, винты, шпильки, хомуты, болты, штифты, шпонки.</li>
+            <li>Если в строке несколько слов — первое всегда <strong>существительное</strong>.</li>
+            <li>Элемент и Подэлемент — в <strong>единственном числе</strong> и <strong>именительном падеже</strong>.</li>
+            <li>Слова <strong>не сокращаем</strong> и не заменяем синонимами.</li>
+            <li>Норма часов исключена — используем «Трудозатр.,ч». Тип ТМЦ скрыт, ТМЦ хранится полным наименованием.</li>
+          </ul>
+        </details>
       </div>
     );
   }
@@ -918,6 +1141,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
       setFailures(modelId, failures.filter((f) => f.id !== id));
 
     const stats = computeReliability(failures);
+
     // Разбивка отказов по компонентам.
     const byComp = new Map<string, { count: number; totalDowntime: number }>();
     for (const f of failures) {
