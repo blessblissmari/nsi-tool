@@ -38,7 +38,11 @@ export interface AiProvider {
   suggestActions(input: {
     model: Pick<EquipmentModel, 'className' | 'subclassName' | 'normalizedCode'>;
   }): Promise<
-    Array<Pick<ActionItem, 'name' | 'kind' | 'periodHours'> & { reason?: string }>
+    Array<Pick<ActionItem, 'name' | 'kind' | 'periodHours'> & {
+      reason?: string;
+      /** URL источника регламента производителя, если ИИ его уверенно знает. */
+      sourceUrl?: string;
+    }>
   >;
 
   /**
@@ -58,6 +62,8 @@ export interface AiProvider {
       Pick<Characteristic, 'key' | 'valueRaw' | 'unit'> & {
         confidence?: number;
         reason?: string;
+        /** URL источника, если ИИ его уверенно знает (https://). */
+        sourceUrl?: string;
       }
     >
   >;

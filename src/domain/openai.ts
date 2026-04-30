@@ -202,6 +202,28 @@ function fingerprint(...parts: unknown[]): string {
   return Math.abs(h).toString(36);
 }
 
+/**
+ * Очистка URL, который вернул ИИ. Принимаем только https://, отбрасываем
+ * подозрительные домены (example.com / localhost / IP). Это защита от
+ * галлюцинированных URL — лучше не показать ничего, чем показать мусор.
+ */
+function sanitizeUrl(input?: string): string | undefined {
+  if (!input || typeof input !== 'string') return undefined;
+  const s = input.trim();
+  if (!s) return undefined;
+  if (!/^https:\/\//i.test(s)) return undefined;
+  try {
+    const u = new URL(s);
+    const host = u.hostname.toLowerCase();
+    if (!host || /^[\d.]+$/.test(host)) return undefined;
+    if (/(^|\.)example\.(com|org|net)$/.test(host)) return undefined;
+    if (host === 'localhost') return undefined;
+    return u.toString();
+  } catch {
+    return undefined;
+  }
+}
+
 export const openaiAiProvider: AiProvider = {
   async classify(input: {
     model: Pick<EquipmentModel, 'rawCode' | 'normalizedCode'>;
@@ -288,7 +310,7 @@ ${text}`;
   async suggestActions(input: {
     model: Pick<EquipmentModel, 'className' | 'subclassName' | 'normalizedCode'>;
   }): Promise<
-    Array<Pick<ActionItem, 'name' | 'kind' | 'periodHours'> & { reason?: string }>
+    Array<Pick<ActionItem, 'name' | 'kind' | 'periodHours'> & { reason?: string; sourceUrl?: string }>
   > {
     const cacheKey = 'actions:' + fingerprint(input.model);
     const system =
@@ -305,7 +327,9 @@ ${text}`;
       '(2) kind: "TO" для ЕО/ТО-*, "repair" для ТР-*/КР-*, ' +
       '"inspection" для осмотров, "diagnostic" для диагностик. ' +
       '(3) reason — краткое обоснование (1 строка): что входит в ВВ. ' +
-      'Возвращай json {"items":[{"name":"ТО-1","kind":"TO","periodHours":250,"reason":"..."}]}. ' +
+      '(4) Если знаешь конкретный URL руководства/регламента производителя, ' +
+      'добавь sourceUrl (только https://). Не выдумывай URL — лучше null. ' +
+      'Возвращай json {"items":[{"name":"ТО-1","kind":"TO","periodHours":250,"reason":"...","sourceUrl":"https://..."}]}. ' +
       '5–9 строк, periodHours — целое число часов.';
     const user = `Класс: ${input.model.className ?? '—'}
 Подкласс: ${input.model.subclassName ?? '—'}
@@ -316,12 +340,13 @@ ${text}`;
         kind?: ActionItem['kind'];
         periodHours?: number;
         reason?: string;
+        sourceUrl?: string | null;
       }>;
     };
     const result = await callOpenAI<Out>(cacheKey, {
       system,
       user,
-      maxTokens: 700,
+      maxTokens: 800,
       isEmpty: (v) => {
         const items = (v as Out | undefined)?.items;
         return !items || items.length === 0;
@@ -330,7 +355,14 @@ ${text}`;
     if (!result?.items) return [];
     return result.items
       .filter((x) => x.name && typeof x.periodHours === 'number')
-      .slice(0, 12);
+      .slice(0, 12)
+      .map((x) => ({
+        name: x.name,
+        kind: x.kind,
+        periodHours: x.periodHours,
+        reason: x.reason,
+        sourceUrl: sanitizeUrl(x.sourceUrl ?? undefined),
+      }));
   },
 
   async enrichCharacteristicsFromWeb(input: {
@@ -341,6 +373,7 @@ ${text}`;
       Pick<Characteristic, 'key' | 'valueRaw' | 'unit'> & {
         confidence?: number;
         reason?: string;
+        sourceUrl?: string;
       }
     >
   > {
@@ -373,7 +406,10 @@ ${text}`;
       'значение в других единицах — пересчитай (кВт↔л.с., МПа↔бар). ' +
       '(5) В reason — явно указывай источник: «паспорт модели X», ' +
       '«каталог производителя Y», «типовое для подкласса». ' +
-      'Возвращай ТОЛЬКО json {"items":[{"key":"...","valueRaw":"...","unit":"...","confidence":0.0-1.0,"reason":"..."}]}.';
+      '(6) Если знаешь конкретный URL производителя/каталога/руководства, ' +
+      'добавь поле sourceUrl с этим URL (только https://). Не выдумывай URL — ' +
+      'если точного нет, верни sourceUrl: null. ' +
+      'Возвращай ТОЛЬКО json {"items":[{"key":"...","valueRaw":"...","unit":"...","confidence":0.0-1.0,"reason":"...","sourceUrl":"https://..."}]}.';
     const user = `Модель: ${code}
 Класс: ${input.model.className ?? '—'}
 Подкласс: ${input.model.subclassName ?? '—'}
@@ -385,12 +421,13 @@ ${text}`;
         unit?: string;
         confidence?: number;
         reason?: string;
+        sourceUrl?: string | null;
       }>;
     };
     const result = await callOpenAI<Out>(cacheKey, {
       system,
       user,
-      maxTokens: 800,
+      maxTokens: 1000,
       isEmpty: (v) => {
         const items = (v as Out | undefined)?.items;
         return !items || items.length === 0;
@@ -407,6 +444,7 @@ ${text}`;
         confidence:
           typeof x.confidence === 'number' ? x.confidence : undefined,
         reason: x.reason,
+        sourceUrl: sanitizeUrl(x.sourceUrl ?? undefined),
       }));
   },
 

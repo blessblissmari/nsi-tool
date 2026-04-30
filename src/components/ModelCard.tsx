@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '../store';
 import {
   getUiSettings,
@@ -28,6 +28,7 @@ import { extractTextFromFile, extractTextFromUrl } from '../parsers/docText';
 import { aiProvider } from '../domain/ai';
 import { getApiKey } from '../domain/openai';
 import { loadModelsDb, lookupModel } from '../data/modelsDb';
+import { autoImportFile } from '../parsers/autoImport';
 import * as XLSX from 'xlsx';
 
 type Tab =
@@ -215,6 +216,8 @@ export function ModelCard({ modelId }: { modelId: string }) {
     const upsert = useStore((s) => s.upsertTechCardRow);
     const del = useStore((s) => s.deleteTechCardRow);
     const setTechCard = useStore((s) => s.setTechCard);
+    const applyReference = useStore((s) => s.applyReference);
+    const specialtiesInput = useRef<HTMLInputElement>(null);
     const [aiBusy, setAiBusy] = useState(false);
     const [aiErr, setAiErr] = useState('');
     /**
@@ -834,7 +837,39 @@ export function ModelCard({ modelId }: { modelId: string }) {
                 <th style={{ width: 170 }}>Операция</th>
                 <th style={{ width: 90 }}>ВВ</th>
                 <th style={{ width: 70 }}>Период, ч</th>
-                <th style={{ width: 130 }}>Профессия</th>
+                <th style={{ width: 130 }} title="Профессия из справочника специальностей. Кнопкой 📥 можно загрузить свой xlsx-справочник.">
+                  Профессия{' '}
+                  <button
+                    className="link-btn"
+                    title="Загрузить справочник специальностей (xlsx). Колонки: Профессия, Разряды (через запятую)."
+                    onClick={() => specialtiesInput.current?.click()}
+                  >
+                    📥
+                  </button>
+                  <input
+                    ref={specialtiesInput}
+                    type="file"
+                    accept=".xlsx,.xls,.csv"
+                    style={{ display: 'none' }}
+                    onChange={async (e) => {
+                      const f = e.target.files?.[0];
+                      if (!f) return;
+                      try {
+                        const r = await autoImportFile(f);
+                        if (r.kind === 'reference' && r.reference?.kind === 'specialtiesRef') {
+                          const res = applyReference('specialtiesRef', r.reference.data);
+                          alert(`Загружено: ${res.count} специальностей`);
+                        } else {
+                          alert('Файл не распознан как справочник специальностей. Ожидаются колонки «Профессия», «Разряды».');
+                        }
+                      } catch (err) {
+                        alert('Ошибка загрузки: ' + (err as Error).message);
+                      } finally {
+                        if (e.target) e.target.value = '';
+                      }
+                    }}
+                  />
+                </th>
                 <th style={{ width: 60 }}>Разряд</th>
                 <th style={{ width: 70 }} title="Трудозатраты на отдельную профессию (чел/ч).">Трудозатр.,ч</th>
                 <th style={{ width: 140 }}>ТМЦ</th>
@@ -1842,6 +1877,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
             periodHours: p.periodHours,
             source: 'web',
             note: p.reason,
+            sourceUrl: p.sourceUrl,
           }));
         setItems([...locked, ...newItems]);
       } catch (e) {
@@ -1924,6 +1960,17 @@ export function ModelCard({ modelId }: { modelId: string }) {
                 </td>
                 <td className="muted small">
                   <SourceBadge source={a.source} />
+                  {a.sourceUrl && (
+                    <a
+                      href={a.sourceUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      title={`Источник: ${a.sourceUrl}`}
+                      style={{ marginLeft: 4 }}
+                    >
+                      🔗
+                    </a>
+                  )}
                 </td>
                 <td>
                   <input
@@ -2628,6 +2675,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
               isPriority: true,
               priorityOrder: keys.findIndex((k) => k.key === x.key),
               source: 'web' as const,
+              sourceUrl: x.sourceUrl,
             });
           }
         } catch (e) {
@@ -2838,6 +2886,17 @@ export function ModelCard({ modelId }: { modelId: string }) {
                     >
                       📎
                     </button>
+                    {c.sourceUrl && (
+                      <a
+                        href={c.sourceUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        title={`Источник: ${c.sourceUrl}`}
+                        style={{ marginLeft: 4 }}
+                      >
+                        🔗
+                      </a>
+                    )}
                     {c.lockedByExpert ? ' 🔒' : ''}
                   </td>
                   <td>

@@ -142,6 +142,8 @@ export interface ActionItem {
   source: SourceKind;
   /** Произвольное описание/комментарий. */
   note?: string;
+  /** URL источника, если известен (напр., каталог производителя). */
+  sourceUrl?: string;
   /** Зафиксировано экспертом — не перезаписывается автоматикой. */
   lockedByExpert?: boolean;
 }
@@ -183,6 +185,8 @@ export interface Characteristic {
   source: SourceKind;
   /** Документ, из которого извлечено (если применимо). */
   documentId?: string;
+  /** URL источника (для source='web' — ссылка на каталог/руководство производителя). */
+  sourceUrl?: string;
   /** Зафиксировано экспертом — не перезаписывается автоматикой. */
   lockedByExpert?: boolean;
 }
