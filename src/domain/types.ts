@@ -55,6 +55,8 @@ export interface EquipmentModel {
     confidence?: number;
     source?: string;
   };
+  /** Свободные атрибуты (отметки эксперта в UI: «аналог подходит», заметки и т.п.). */
+  attributes?: Record<string, string>;
 }
 
 /** Одна строка техкарты в табличной форме «Модель → Элемент → Подэлемент → Операция → ТМЦ». */

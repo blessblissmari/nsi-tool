@@ -552,6 +552,15 @@ select:focus {
 .analog-far {
   background: #fce8e6;
 }
+/* Чипы-памятка цветовой шкалы аналогов: показывает пользователю,
+ * как читать цветовое выделение «подходит / не подходит». */
+.legend-chip {
+  display: inline-block;
+  padding: 1px 8px;
+  border: 1px solid #ccc;
+  font-size: 11px;
+}
+
 .btn-as-label {
   display: inline-flex;
   align-items: center;
@@ -774,4 +783,11 @@ table.models tr.src-classifier > td { background: #fff0e6; }
 table.models input.warn {
   background: #fff0e6;
   border-color: #d97706;
+}
+
+/* Спецификации: строка BOM, у которой есть привязки к строкам техкарты
+ * без указания ВВ — такая ТМЦ не попадёт в APL и нуждается во внимании. */
+table.models tr.spec-no-vv > td {
+  background: #fff4e0;
+  border-left: 3px solid #d97706;
 }

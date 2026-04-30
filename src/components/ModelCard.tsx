@@ -41,15 +41,18 @@ type Tab =
   | 'ppr'
   | 'reliability';
 
+// Порядок вкладок задан заказчиком (созвон 28.04.2026):
+// Свойства → Документы → Характеристики → Аналоги → ВВ → График ППР →
+// Тех.карты → Спецификации → Надёжность.
 const TABS: Array<{ id: Tab; label: string; ready: boolean }> = [
   { id: 'props', label: 'Свойства', ready: true },
   { id: 'docs', label: 'Документы', ready: true },
   { id: 'chars', label: 'Характеристики', ready: true },
+  { id: 'analogs', label: 'Аналоги', ready: true },
   { id: 'actions', label: 'ВВ', ready: true },
   { id: 'ppr', label: 'График ППР', ready: true },
   { id: 'techcards', label: 'Техкарты', ready: true },
   { id: 'specs', label: 'Спецификации', ready: true },
-  { id: 'analogs', label: 'Аналоги', ready: true },
   { id: 'reliability', label: 'Надёжность', ready: true },
 ];
 
@@ -221,14 +224,32 @@ export function ModelCard({ modelId }: { modelId: string }) {
      * Не мутирует store — это только UI-фильтр (созвон 28.04.2026: «только то1»).
      */
     const [actionFilter, setActionFilter] = useState<string>('');
+    /**
+     * Скрывать крепёж (созвон 28.04.2026): «Когда видишь болты, саморезы и т.д.,
+     * отверстие техническое — не показывай в техкарте». По умолчанию скрываем;
+     * пользователь может показать через тогглер для контроля.
+     */
+    const [hideFasteners, setHideFasteners] = useState<boolean>(true);
     if (!m) return null;
     const allRows = m.techCard ?? [];
-    const rows =
+    /**
+     * Регулярка для определения крепежа. Список из §8.3 ТЗ + созвон.
+     * Срабатывает по началу слова в Элементе или Подэлементе.
+     */
+    const FASTENER_RX = /^(болт|саморез|винт|гайк|шайб|шпильк|хомут|штифт|шпонк|отверстие\s+технич)/iu;
+    const isFastenerRow = (r: { component?: string; subcomponent?: string }) =>
+      FASTENER_RX.test(r.component?.trim() ?? '') ||
+      FASTENER_RX.test(r.subcomponent?.trim() ?? '');
+    const rowsByAction =
       actionFilter === ''
         ? allRows
         : actionFilter === '__none__'
           ? allRows.filter((r) => !r.actionId)
           : allRows.filter((r) => r.actionId === actionFilter);
+    const rows = hideFasteners
+      ? rowsByAction.filter((r) => !isFastenerRow(r))
+      : rowsByAction;
+    const hiddenFastenerCount = rowsByAction.length - rows.length;
     const ops = refs.operations;
     const specs = refs.specialties;
     const acts = m.actions ?? [];
@@ -546,6 +567,13 @@ export function ModelCard({ modelId }: { modelId: string }) {
       }
     };
 
+    /**
+     * «🌐 Поиск в интернете» — обогащает техкарту из открытых источников.
+     * Поведение по созвону 28.04.2026: если строка с такой же сцепкой
+     * (Элемент + Подэлемент + Операция + ВВ) уже есть — **дозаполняем пустые
+     * ячейки** существующей строки, а не добавляем дубль вниз. Если совпадения
+     * нет — создаём новую строку с source='web'.
+     */
     const fillByAi = async () => {
       if (aiBusy) return;
       if (!hasKey) {
@@ -583,27 +611,76 @@ export function ModelCard({ modelId }: { modelId: string }) {
           );
           return;
         }
+        // Совпадение строки: одинаковый ВВ + Элемент + Подэлемент + Операция
+        // (без учёта регистра и пробелов). Это правило — из ТЗ §6.5: ИИ
+        // дозаполняет существующий состав, а не клонирует строки.
+        const norm = (s?: string) => (s ?? '').trim().toLowerCase();
+        const k = (r: { actionId?: string; component?: string; subcomponent?: string; operation?: string }) =>
+          `${r.actionId ?? ''}|${norm(r.component)}|${norm(r.subcomponent)}|${norm(r.operation)}`;
+        const existing = m.techCard ?? [];
+        const byKey = new Map<string, typeof existing[number]>();
+        for (const r of existing) byKey.set(k(r), r);
+
+        let updated = 0;
+        let created = 0;
         for (const r of result) {
-          upsert(modelId, {
-            component: r.component,
-            subcomponent: r.subcomponent,
-            operation: r.operation,
-            workDescription: r.workDescription,
-            actionId: r.actionId,
-            laborHours: r.laborHours,
-            workers: r.workers,
-            specialty: r.specialty,
-            qualification: r.qualification,
-            totalLaborHours: r.totalLaborHours,
-            tmcName: r.tmcName,
-            tmcKind: r.tmcKind,
-            tmcUnit: r.tmcUnit,
-            tmcQty: r.tmcQty,
-            tools: r.tools,
-            ppe: r.ppe,
-            safety: r.safety,
-            source: 'ai',
-          });
+          const match = byKey.get(k(r));
+          if (match) {
+            // Дозаполняем только пустые поля; источник существующей строки
+            // не меняем (её мог поставить эксперт).
+            const patch: Partial<typeof match> = {};
+            const fillIfEmpty = <K extends keyof typeof match>(field: K, value: typeof match[K] | undefined) => {
+              if (value === undefined || value === null || value === '') return;
+              const cur = match[field];
+              if (cur === undefined || cur === null || cur === '') {
+                patch[field] = value;
+              }
+            };
+            fillIfEmpty('workDescription', r.workDescription);
+            fillIfEmpty('laborHours', r.laborHours);
+            fillIfEmpty('workers', r.workers);
+            fillIfEmpty('specialty', r.specialty);
+            fillIfEmpty('qualification', r.qualification);
+            fillIfEmpty('totalLaborHours', r.totalLaborHours);
+            fillIfEmpty('tmcName', r.tmcName);
+            fillIfEmpty('tmcKind', r.tmcKind);
+            fillIfEmpty('tmcUnit', r.tmcUnit);
+            fillIfEmpty('tmcQty', r.tmcQty);
+            fillIfEmpty('tools', r.tools);
+            fillIfEmpty('ppe', r.ppe);
+            fillIfEmpty('safety', r.safety);
+            if (Object.keys(patch).length > 0) {
+              upsert(modelId, { id: match.id, ...patch });
+              updated++;
+            }
+          } else {
+            upsert(modelId, {
+              component: r.component,
+              subcomponent: r.subcomponent,
+              operation: r.operation,
+              workDescription: r.workDescription,
+              actionId: r.actionId,
+              laborHours: r.laborHours,
+              workers: r.workers,
+              specialty: r.specialty,
+              qualification: r.qualification,
+              totalLaborHours: r.totalLaborHours,
+              tmcName: r.tmcName,
+              tmcKind: r.tmcKind,
+              tmcUnit: r.tmcUnit,
+              tmcQty: r.tmcQty,
+              tools: r.tools,
+              ppe: r.ppe,
+              safety: r.safety,
+              source: 'web',
+            });
+            created++;
+          }
+        }
+        if (updated || created) {
+          setAiErr(
+            `Готово: дозаполнено ${updated} строк, добавлено ${created} новых.`,
+          );
         }
       } catch (e) {
         setAiErr('Ошибка ИИ: ' + (e instanceof Error ? e.message : String(e)));
@@ -686,19 +763,6 @@ export function ModelCard({ modelId }: { modelId: string }) {
             {aiBusy ? '…' : '🔧 Операции'}
           </button>
           <button
-            onClick={fillByAi}
-            disabled={aiBusy || !hasKey || acts.length === 0}
-            title={
-              !hasKey
-                ? 'Укажите OpenAI ключ в «Настройках».'
-                : acts.length === 0
-                  ? 'Добавьте хотя бы одно ВВ перед заполнением ИИ.'
-                  : 'Сгенерировать техкарту целиком: ИИ ищет в интернете типовые операции и ТМЦ под класс/подкласс и список ВВ.'
-            }
-          >
-            {aiBusy ? '…ИИ работает' : '🌐 Поиск в интернете'}
-          </button>
-          <button
             onClick={normalizeAllRows}
             disabled={rows.length === 0}
             title={
@@ -710,6 +774,19 @@ export function ModelCard({ modelId }: { modelId: string }) {
             🪄 Нормализовать
           </button>
           <button
+            onClick={fillByAi}
+            disabled={aiBusy || !hasKey || acts.length === 0}
+            title={
+              !hasKey
+                ? 'Укажите OpenAI ключ в «Настройках».'
+                : acts.length === 0
+                  ? 'Добавьте хотя бы одно ВВ перед заполнением ИИ.'
+                  : 'Найти типовые операции, трудоёмкость и ТМЦ в открытых источниках. Если строка с такой же сцепкой Элемент+Подэлемент+Операция+ВВ уже есть — дозаполняет пустые поля, а не клонирует.'
+            }
+          >
+            {aiBusy ? '…ИИ работает' : '🌐 Поиск в интернете'}
+          </button>
+          <button
             onClick={toggleFullscreen}
             title={
               fullscreen
@@ -719,10 +796,23 @@ export function ModelCard({ modelId }: { modelId: string }) {
           >
             {fullscreen ? '⤤ К дереву' : '⛶ На весь экран'}
           </button>
+          <label className="muted small" style={{ display: 'flex', alignItems: 'center', gap: 4 }}
+            title="Скрыть в техкарте крепёж (болты, саморезы, винты, гайки, шайбы, шпильки, хомуты, штифты, шпонки) и «отверстие техническое»."
+          >
+            <input
+              type="checkbox"
+              checked={hideFasteners}
+              onChange={(e) => setHideFasteners(e.target.checked)}
+            />
+            скрывать крепёж
+          </label>
           <span className="muted small">
             {actionFilter
               ? `${rows.length} из ${allRows.length}`
               : `${rows.length}`} строк
+            {hiddenFastenerCount > 0 && (
+              <> · скрыто крепежа: {hiddenFastenerCount}</>
+            )}
             {ops.length ? ` · справочник операций: ${ops.length}` : ''}
             {specs.length ? ` · специальностей: ${specs.length}` : ''}
             {!ops.length && (
@@ -1592,11 +1682,18 @@ export function ModelCard({ modelId }: { modelId: string }) {
       return inCls?.unit;
     };
 
+    const currentCode = m.normalizedCode || m.rawCode;
     return (
       <div>
         <div className="muted small" style={{ marginBottom: 6 }}>
           Аналоги по {sameSub.length > 0 ? 'подклассу' : 'классу'}: {ranked.length}.
           Сравнение по приоритетным характеристикам класса/подкласса.
+        </div>
+        <div className="row-flex small" style={{ gap: 12, marginBottom: 6, flexWrap: 'wrap' }}>
+          <span className="legend-chip analog-eq">≈ совпадает (≤5%)</span>
+          <span className="legend-chip analog-near">близко (≤25%)</span>
+          <span className="legend-chip analog-far">отличается</span>
+          <span className="legend-chip">— нет данных</span>
         </div>
         <div style={{ overflowX: 'auto' }}>
           <table className="models">
@@ -1604,12 +1701,42 @@ export function ModelCard({ modelId }: { modelId: string }) {
               <tr>
                 <th style={{ width: 200 }}>Характеристика</th>
                 <th style={{ width: 60 }}>Ед.</th>
-                <th style={{ width: 100 }}>Текущая</th>
+                <th style={{ width: 130 }} title="Код текущей модели — той, для которой ищем аналоги.">
+                  ТЕКУЩАЯ · {currentCode}
+                </th>
                 {ranked.map((r) => (
-                  <th key={r.m.id} style={{ width: 100 }}>
+                  <th key={r.m.id} style={{ width: 130 }}>
                     {r.m.normalizedCode || r.m.rawCode}
                   </th>
                 ))}
+              </tr>
+              <tr>
+                <th colSpan={3} className="muted small" style={{ textAlign: 'right' }}
+                  title="Отметьте, какие модели подходят как аналог. Сохраняется в локальном состоянии сессии."
+                >
+                  Подходит:
+                </th>
+                {ranked.map((r) => {
+                  const aname = r.m.normalizedCode || r.m.rawCode;
+                  return (
+                    <th key={`fit-${r.m.id}`} style={{ textAlign: 'center' }}>
+                      <label className="muted small" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                        <input
+                          type="checkbox"
+                          defaultChecked={!!(m.attributes ?? {})[`analog_fit:${aname}`]}
+                          onChange={(e) => {
+                            const next = { ...(m.attributes ?? {}) };
+                            const k = `analog_fit:${aname}`;
+                            if (e.target.checked) next[k] = '1';
+                            else delete next[k];
+                            update(m.id, { attributes: next });
+                          }}
+                        />
+                        ✓
+                      </label>
+                    </th>
+                  );
+                })}
               </tr>
             </thead>
             <tbody>
@@ -1679,9 +1806,15 @@ export function ModelCard({ modelId }: { modelId: string }) {
           source: 'manual',
         },
       ]);
-    const aiSuggest = async (sourceTag: 'ai' | 'web' = 'ai') => {
+    /**
+     * Подбор ВВ через ИИ. Объединяет «Предложить через ИИ» и
+     * «Обогатить из интернета» (созвон 28.04.2026 — в одну кнопку).
+     * Источник тегируем `web`, т.к. ИИ опирается на общедоступные
+     * регламенты/руководства производителей.
+     */
+    const aiSuggest = async () => {
       if (!m.className) {
-        alert('Сначала определите класс модели.');
+        alert('Сначала определите класс модели — без него ИИ не сможет подобрать виды воздействия.');
         return;
       }
       try {
@@ -1693,11 +1826,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
           },
         });
         if (!proposals.length) {
-          alert(
-            sourceTag === 'web'
-              ? 'По модели не нашлось общедоступных регламентов ВВ.'
-              : 'ИИ не предложил вариантов.',
-          );
+          alert('ИИ не нашёл подходящих ВВ для этой модели. Уточните класс/подкласс или добавьте ВВ вручную.');
           return;
         }
         const locked = items.filter((x) => x.lockedByExpert);
@@ -1711,7 +1840,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
             name: p.name,
             kind: p.kind,
             periodHours: p.periodHours,
-            source: sourceTag,
+            source: 'web',
             note: p.reason,
           }));
         setItems([...locked, ...newItems]);
@@ -1724,30 +1853,17 @@ export function ModelCard({ modelId }: { modelId: string }) {
       <div>
         <div className="row-flex" style={{ gap: 6, marginBottom: 6 }}>
           <button
-            onClick={() => aiSuggest('ai')}
+            onClick={() => aiSuggest()}
             disabled={!getApiKey() || !m.className}
             title={
               !getApiKey()
                 ? 'Подключите OpenAI ключ в кнопке «ИИ» в шапке'
                 : !m.className
                   ? 'Сначала определите класс модели'
-                  : 'Предложить ВВ через ИИ (по классу/подклассу/коду)'
+                  : 'Подобрать ВВ через ИИ — по классу/подклассу/коду модели и общедоступным регламентам производителей'
             }
           >
-            Предложить через ИИ
-          </button>
-          <button
-            onClick={() => aiSuggest('web')}
-            disabled={!getApiKey() || !m.className}
-            title={
-              !getApiKey()
-                ? 'Подключите OpenAI ключ в «Настройках»'
-                : !m.className
-                  ? 'Сначала определите класс модели'
-                  : 'Подобрать ВВ из общедоступных регламентов / руководств производителя'
-            }
-          >
-            Обогатить из интернета
+            🤖 Подобрать через ИИ
           </button>
           <span className="muted small">
             ВВ: {items.length} (
@@ -2429,109 +2545,104 @@ export function ModelCard({ modelId }: { modelId: string }) {
       return keys;
     };
 
-    const enrichFromWeb = async () => {
+    /**
+     * Объединённая кнопка «Заполнить через ИИ» (созвон 28.04.2026):
+     * 1) если есть распознанный текст документов — извлекаем из них (source='ai');
+     * 2) то, что не нашлось в документах (или если документов нет) — обогащаем
+     *    общедоступными данными производителей (source='web').
+     * Зафиксированные экспертом значения не перетираем; ручные не-приоритетные —
+     * сохраняем.
+     */
+    const aiSmartFill = async () => {
       if (!m.className) {
-        alert('Сначала определите класс модели.');
+        alert('Сначала определите класс модели — без него ИИ не сможет заполнить характеристики.');
         return;
       }
       const keys = buildPriorityKeys();
       if (!keys.length) {
-        alert(
-          'Не заданы приоритетные характеристики класса/подкласса. Загрузите классификатор.',
-        );
+        alert('Не заданы приоритетные характеристики класса/подкласса. Загрузите классификатор «Простоев.Нет» или добавьте характеристики в классе.');
         return;
       }
-      try {
-        const items = await aiProvider().enrichCharacteristicsFromWeb({
-          model: {
-            className: m.className,
-            subclassName: m.subclassName,
-            normalizedCode: m.normalizedCode,
-            rawCode: m.rawCode,
-          },
-          keys,
-        });
-        if (!items.length) {
-          alert(
-            'По модели не нашлось общедоступных данных. Попробуйте уточнить код модели или класс.',
-          );
-          return;
-        }
-        const existing = m.characteristics ?? [];
-        const locked = existing.filter((c) => c.lockedByExpert);
-        const lockedKeys = new Set(locked.map((c) => c.key.toLowerCase()));
-        // Берём существующие НЕ-приоритетные характеристики и НЕ-перезаписываемые ручные значения
-        const keepManual = existing.filter(
-          (c) =>
-            !c.lockedByExpert &&
-            c.source === 'manual' &&
-            !!c.valueRaw &&
-            !keys.find((k) => k.key === c.key),
-        );
-        const webChars: Characteristic[] = items
-          .filter((x) => !lockedKeys.has(x.key.toLowerCase()))
-          .map((x) => ({
-            id: newId('c'),
-            key: x.key,
-            valueRaw: x.valueRaw,
-            unit: x.unit,
-            targetUnit: keys.find((k) => k.key === x.key)?.unit,
-            isPriority: true,
-            priorityOrder: keys.findIndex((k) => k.key === x.key),
-            source: 'web' as const,
-          }));
-        setChars([...locked, ...keepManual, ...webChars]);
-      } catch (e) {
-        alert('Ошибка ИИ: ' + (e as Error).message);
-      }
-    };
+      const existing = m.characteristics ?? [];
+      const locked = existing.filter((c) => c.lockedByExpert);
+      const lockedKeys = new Set(locked.map((c) => c.key.toLowerCase()));
+      const keepManual = existing.filter(
+        (c) =>
+          !c.lockedByExpert &&
+          c.source === 'manual' &&
+          !!c.valueRaw &&
+          !keys.find((k) => k.key === c.key),
+      );
 
-    const aiExtract = async () => {
-      const docs = m.documents ?? [];
-      const text = docs
+      // Этап 1 — документы (если есть распознанный текст).
+      const text = (m.documents ?? [])
         .map((d) => d.parsedText || '')
         .filter(Boolean)
         .join('\n\n');
-      if (!text.trim()) {
-        alert(
-          'Нет распознанного текста. Загрузите документ во вкладке «Документы».',
-        );
-        return;
-      }
-      const keys = buildPriorityKeys();
-      if (!keys.length) {
-        alert(
-          'Не заданы приоритетные характеристики класса/подкласса. Загрузите классификатор.',
-        );
-        return;
-      }
-      try {
-        const items = await aiProvider().extractCharacteristics({
-          text,
-          keys,
-        });
-        if (!items.length) {
-          alert('ИИ не нашёл значений в документе.');
+      const fromDocs: Characteristic[] = [];
+      if (text.trim()) {
+        try {
+          const items = await aiProvider().extractCharacteristics({ text, keys });
+          for (const x of items) {
+            if (lockedKeys.has(x.key.toLowerCase())) continue;
+            fromDocs.push({
+              id: newId('c'),
+              key: x.key,
+              valueRaw: x.valueRaw,
+              unit: x.unit,
+              targetUnit: keys.find((k) => k.key === x.key)?.unit,
+              isPriority: true,
+              priorityOrder: keys.findIndex((k) => k.key === x.key),
+              source: 'ai' as const,
+            });
+          }
+        } catch (e) {
+          alert('Ошибка извлечения из документов: ' + (e as Error).message);
           return;
         }
-        const locked = (m.characteristics ?? []).filter((c) => c.lockedByExpert);
-        const lockedKeys = new Set(locked.map((c) => c.key.toLowerCase()));
-        const aiChars: Characteristic[] = items
-          .filter((x) => !lockedKeys.has(x.key.toLowerCase()))
-          .map((x) => ({
-            id: newId('c'),
-            key: x.key,
-            valueRaw: x.valueRaw,
-            unit: x.unit,
-            targetUnit: keys.find((k) => k.key === x.key)?.unit,
-            isPriority: true,
-            priorityOrder: keys.findIndex((k) => k.key === x.key),
-            source: 'ai' as const,
-          }));
-        setChars([...locked, ...aiChars]);
-      } catch (e) {
-        alert('Ошибка ИИ: ' + (e as Error).message);
       }
+
+      // Этап 2 — интернет: дозаполняем то, что не нашлось в документах.
+      const filledKeys = new Set(fromDocs.map((c) => c.key.toLowerCase()));
+      const missingKeys = keys.filter((k) => !filledKeys.has(k.key.toLowerCase()));
+      const fromWeb: Characteristic[] = [];
+      if (missingKeys.length > 0) {
+        try {
+          const items = await aiProvider().enrichCharacteristicsFromWeb({
+            model: {
+              className: m.className,
+              subclassName: m.subclassName,
+              normalizedCode: m.normalizedCode,
+              rawCode: m.rawCode,
+            },
+            keys: missingKeys,
+          });
+          for (const x of items) {
+            if (lockedKeys.has(x.key.toLowerCase())) continue;
+            fromWeb.push({
+              id: newId('c'),
+              key: x.key,
+              valueRaw: x.valueRaw,
+              unit: x.unit,
+              targetUnit: keys.find((k) => k.key === x.key)?.unit,
+              isPriority: true,
+              priorityOrder: keys.findIndex((k) => k.key === x.key),
+              source: 'web' as const,
+            });
+          }
+        } catch (e) {
+          alert('Ошибка обогащения из интернета: ' + (e as Error).message);
+          return;
+        }
+      }
+
+      if (fromDocs.length === 0 && fromWeb.length === 0) {
+        alert(
+          'Не удалось найти значения характеристик ни в документах, ни в открытых источниках. Уточните класс/подкласс или код модели.',
+        );
+        return;
+      }
+      setChars([...locked, ...keepManual, ...fromDocs, ...fromWeb]);
     };
 
     const fillFromDb = async () => {
@@ -2609,35 +2720,22 @@ export function ModelCard({ modelId }: { modelId: string }) {
           <button
             onClick={extractFromDocs}
             disabled={!(m.documents ?? []).some((d) => d.parsedText)}
-            title="Парсить характеристики из распознанного текста документов"
+            title="Извлечь значения парсером из распознанного текста документов (без ИИ)"
           >
-            Извлечь из документов
+            📄 Из документов (парсер)
           </button>
           <button
-            onClick={aiExtract}
-            disabled={
-              !getApiKey() || !(m.documents ?? []).some((d) => d.parsedText)
-            }
-            title={
-              !getApiKey()
-                ? 'Подключите OpenAI ключ в кнопке «ИИ» в шапке'
-                : 'Извлечь характеристики через ИИ — фоллбек, если парсер пуст'
-            }
-          >
-            Извлечь через ИИ
-          </button>
-          <button
-            onClick={enrichFromWeb}
+            onClick={aiSmartFill}
             disabled={!getApiKey() || !m.className}
             title={
               !getApiKey()
                 ? 'Подключите OpenAI ключ в «Настройках»'
                 : !m.className
                   ? 'Сначала определите класс модели'
-                  : 'Обогатить характеристики типовыми значениями из общедоступных каталогов и руководств производителей'
+                  : 'Заполнить через ИИ: сначала из загруженных документов, затем дозаполнить из открытых источников (каталоги/руководства производителей)'
             }
           >
-            Обогатить из интернета
+            🤖 Заполнить через ИИ
           </button>
           <button
             onClick={() => {
@@ -2800,6 +2898,11 @@ export function ModelCard({ modelId }: { modelId: string }) {
     const allModels = useStore((s) => s.models);
     const upsertTcRow = useStore((s) => s.upsertTechCardRow);
     const [busy, setBusy] = useState<'bom' | 'apl' | null>(null);
+    /**
+     * Селектор показа APL по конкретному ВВ (созвон 28.04.2026).
+     * '' = показать все ВВ (по умолчанию). Задаётся id из m.actions.
+     */
+    const [aplActionFilter, setAplActionFilter] = useState<string>('');
     const [webSuggestions, setWebSuggestions] = useState<{
       mode: 'bom' | 'apl';
       items: Array<{
@@ -2856,19 +2959,32 @@ export function ModelCard({ modelId }: { modelId: string }) {
 
     // BOM = плоский список всех ТМЦ из техкарт, агрегированный по
     // (наименование + ед.); инструмент в спецификацию не попадает (п.6.6 + созвон).
+    // К каждой позиции собираем множество источников (manual/ai/web/analog/doc),
+    // чтобы в таблице рядом со строкой показать источник заполнения.
     type BomKey = string;
     const bomMap = new Map<
       BomKey,
-      { name: string; kind: 'material' | 'spare'; unit?: string; qty: number; refs: number }
+      {
+        name: string;
+        kind: 'material' | 'spare';
+        unit?: string;
+        qty: number;
+        refs: number;
+        sources: Set<string>;
+        hasUnboundVV: boolean;
+      }
     >();
     for (const r of rows) {
       if (!r.tmcName || !r.tmcKind) continue;
       const key = `${r.tmcName.trim().toLowerCase()}|${(r.tmcUnit ?? '').toLowerCase()}|${r.tmcKind}`;
       const cur = bomMap.get(key);
       const qty = r.tmcQty ?? 0;
+      const src = r.source ?? 'manual';
       if (cur) {
         cur.qty += qty;
         cur.refs += 1;
+        cur.sources.add(src);
+        if (!r.actionId) cur.hasUnboundVV = true;
       } else {
         bomMap.set(key, {
           name: r.tmcName.trim(),
@@ -2876,6 +2992,8 @@ export function ModelCard({ modelId }: { modelId: string }) {
           unit: r.tmcUnit,
           qty,
           refs: 1,
+          sources: new Set([src]),
+          hasUnboundVV: !r.actionId,
         });
       }
     }
@@ -2886,9 +3004,17 @@ export function ModelCard({ modelId }: { modelId: string }) {
     // APL (Application Parts List, п.6.6 / п.4) = «список компонентов для ВВ
     // ТОиР, БЕЗ расходных материалов» — поэтому группируем по ВВ и фильтруем
     // tmcKind === 'spare'. Расходники (масла, прокладки, фильтры) идут в BOM.
+    type AplItem = {
+      name: string;
+      kind: 'material' | 'spare';
+      unit?: string;
+      qty: number;
+      refs: number;
+      sources: Set<string>;
+    };
     const aplGroups = new Map<
       string,
-      { actionName: string; actionKind?: ActionKind; items: typeof bom }
+      { actionName: string; actionKind?: ActionKind; items: AplItem[] }
     >();
     for (const r of rows) {
       if (!r.tmcName || r.tmcKind !== 'spare') continue;
@@ -2907,9 +3033,11 @@ export function ModelCard({ modelId }: { modelId: string }) {
           (x.unit ?? '').toLowerCase() === (r.tmcUnit ?? '').toLowerCase() &&
           x.kind === r.tmcKind,
       );
+      const src = r.source ?? 'manual';
       if (found) {
         found.qty += r.tmcQty ?? 0;
         found.refs += 1;
+        found.sources.add(src);
       } else {
         g.items.push({
           name: r.tmcName.trim(),
@@ -2917,6 +3045,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
           unit: r.tmcUnit,
           qty: r.tmcQty ?? 0,
           refs: 1,
+          sources: new Set([src]),
         });
       }
     }
@@ -3050,50 +3179,32 @@ export function ModelCard({ modelId }: { modelId: string }) {
                 ? 'Укажите OpenAI ключ в «Настройках»'
                 : acts.length === 0
                   ? 'Сначала добавьте ВВ во вкладке «ВВ»'
-                  : 'Дополнить BOM типовыми позициями из открытых источников'
+                  : 'Дополнить BOM (общий перечень ТМЦ) типовыми позициями из открытых источников. APL автоматически соберётся из BOM по разрезу ВВ.'
             }
             onClick={() => enrichFromWeb('bom')}
           >
-            {busy === 'bom' ? '…' : 'BOM из интернета'}
-          </button>
-          <button
-            disabled={!hasKey || !!busy || acts.length === 0}
-            title={
-              !hasKey
-                ? 'Укажите OpenAI ключ в «Настройках»'
-                : acts.length === 0
-                  ? 'Сначала добавьте ВВ во вкладке «ВВ»'
-                  : 'Дополнить APL типовыми запчастями из открытых источников'
-            }
-            onClick={() => enrichFromWeb('apl')}
-          >
-            {busy === 'apl' ? '…' : 'APL из интернета'}
+            {busy === 'bom' ? '…' : '🌐 BOM из интернета'}
           </button>
           <button
             disabled={!m.className}
             title={
               !m.className
                 ? 'Сначала классифицируйте модель'
-                : 'Найти аналоги BOM в других моделях того же класса/подкласса'
+                : 'Найти аналоги ТМЦ из BOM в других моделях того же класса/подкласса (по выбранным позициям)'
             }
             onClick={() => setAnalogsOpen('bom')}
           >
-            Поиск аналогов BOM
-          </button>
-          <button
-            disabled={!m.className}
-            title={
-              !m.className
-                ? 'Сначала классифицируйте модель'
-                : 'Найти аналоги APL в других моделях того же класса/подкласса'
-            }
-            onClick={() => setAnalogsOpen('apl')}
-          >
-            Поиск аналогов APL
+            🔍 Поиск аналогов ТМЦ
           </button>
         </div>
 
-        <h4 style={{ margin: '8px 0 4px' }}>BOM — все ТМЦ (материалы + запчасти)</h4>
+        <h4 style={{ margin: '8px 0 4px' }}>
+          BOM — общий перечень ТМЦ (материалы + запчасти)
+        </h4>
+        <div className="muted small" style={{ marginBottom: 4 }}>
+          Подсказка: позиции без привязки к ВВ выделены — добавьте им вид
+          воздействия в техкарте, чтобы они попали в APL.
+        </div>
         <table className="models">
           <thead>
             <tr>
@@ -3101,57 +3212,113 @@ export function ModelCard({ modelId }: { modelId: string }) {
               <th style={{ width: 90 }}>Тип</th>
               <th style={{ width: 80 }}>Ед.</th>
               <th style={{ width: 80 }}>Кол-во</th>
+              <th style={{ width: 110 }}>Источник</th>
               <th style={{ width: 110 }}>В техкартах</th>
             </tr>
           </thead>
           <tbody>
             {bom.map((x, i) => (
-              <tr key={i}>
+              <tr
+                key={i}
+                className={x.hasUnboundVV ? 'spec-no-vv' : undefined}
+                title={
+                  x.hasUnboundVV
+                    ? 'В техкарте есть строки с этой ТМЦ без привязки к ВВ — APL для них не построится. Привяжите ВВ во вкладке «Техкарты».'
+                    : undefined
+                }
+              >
                 <td>{x.name}</td>
                 <td>{x.kind === 'material' ? 'материал' : 'запчасть'}</td>
                 <td>{x.unit ?? '—'}</td>
                 <td className="mono">{fmtQty(x.qty)}</td>
+                <td>
+                  {Array.from(x.sources).map((s) => (
+                    <SourceBadge key={s} source={s} />
+                  ))}
+                </td>
                 <td className="muted small">{x.refs}</td>
               </tr>
             ))}
           </tbody>
         </table>
 
-        <h4 style={{ margin: '12px 0 4px' }}>
-          APL — запчасти в разрезе ВВ (без расходных материалов)
-        </h4>
-        {Array.from(aplGroups.values()).map((g, gi) => (
-          <div key={gi} style={{ marginBottom: 8 }}>
-            <div className="muted small" style={{ marginBottom: 2 }}>
-              <b>{g.actionName}</b>
-              {g.actionKind ? ` · ${labelKind(g.actionKind)}` : ''} ·
-              {' '}
-              {g.items.length} позиц.
-            </div>
-            <table className="models">
-              <thead>
-                <tr>
-                  <th>Наименование</th>
-                  <th style={{ width: 90 }}>Тип</th>
-                  <th style={{ width: 80 }}>Ед.</th>
-                  <th style={{ width: 80 }}>Кол-во</th>
-                </tr>
-              </thead>
-              <tbody>
-                {g.items.map((x, i) => (
-                  <tr key={i}>
-                    <td>{x.name}</td>
-                    <td>
-                      {x.kind === 'material' ? 'материал' : 'запчасть'}
-                    </td>
-                    <td>{x.unit ?? '—'}</td>
-                    <td className="mono">{fmtQty(x.qty)}</td>
+        <div className="row-flex" style={{ gap: 8, alignItems: 'center', margin: '12px 0 4px', flexWrap: 'wrap' }}>
+          <h4 style={{ margin: 0 }}>
+            APL — запчасти по виду воздействия (без расходных материалов)
+          </h4>
+          <span className="spacer" />
+          <label className="muted small" style={{ display: 'flex', alignItems: 'center', gap: 4 }}
+            title="APL = срез BOM по конкретному ВВ. Выберите ВВ для просмотра его перечня запчастей или «показать все» для всех ВВ сразу."
+          >
+            ВВ:
+            <select
+              value={aplActionFilter}
+              onChange={(e) => setAplActionFilter(e.target.value)}
+            >
+              <option value="">— показать все —</option>
+              {acts.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name}{a.periodHours ? ` · ${a.periodHours} ч` : ''}
+                </option>
+              ))}
+              {aplGroups.has('__none__') && (
+                <option value="__none__">— без привязки к ВВ —</option>
+              )}
+            </select>
+          </label>
+        </div>
+        {(() => {
+          const visibleGroups = aplActionFilter
+            ? Array.from(aplGroups.entries()).filter(([id]) => id === aplActionFilter)
+            : Array.from(aplGroups.entries());
+          if (visibleGroups.length === 0) {
+            return (
+              <div className="muted small">
+                {aplActionFilter
+                  ? 'Для выбранного ВВ нет запчастей. Добавьте позиции в техкарте или дополните BOM из интернета.'
+                  : 'APL пуст. Добавьте запчасти в техкарте — они автоматически попадут в APL.'}
+              </div>
+            );
+          }
+          return visibleGroups.map(([id, g]) => (
+            <div key={id} style={{ marginBottom: 8 }}>
+              <div className="muted small" style={{ marginBottom: 2 }}>
+                <b>{g.actionName}</b>
+                {g.actionKind ? ` · ${labelKind(g.actionKind)}` : ''} ·
+                {' '}
+                {g.items.length} позиц.
+              </div>
+              <table className="models">
+                <thead>
+                  <tr>
+                    <th>Наименование</th>
+                    <th style={{ width: 90 }}>Тип</th>
+                    <th style={{ width: 80 }}>Ед.</th>
+                    <th style={{ width: 80 }}>Кол-во</th>
+                    <th style={{ width: 110 }}>Источник</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ))}
+                </thead>
+                <tbody>
+                  {g.items.map((x, i) => (
+                    <tr key={i}>
+                      <td>{x.name}</td>
+                      <td>
+                        {x.kind === 'material' ? 'материал' : 'запчасть'}
+                      </td>
+                      <td>{x.unit ?? '—'}</td>
+                      <td className="mono">{fmtQty(x.qty)}</td>
+                      <td>
+                        {Array.from(x.sources).map((s) => (
+                          <SourceBadge key={s} source={s} />
+                        ))}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ));
+        })()}
 
         <h4 style={{ margin: '12px 0 4px' }}>
           AOPL — детали в разрезе компонент агрегата
