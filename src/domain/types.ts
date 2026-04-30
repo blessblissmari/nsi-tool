@@ -110,6 +110,8 @@ export interface FailureRecord {
   description?: string;
   /** Длительность простоя, часы (если задано напрямую). */
   downtimeHours?: number;
+  /** Компонент (узел/деталь), вышедший из строя. */
+  component?: string;
 }
 
 export type SourceKind =

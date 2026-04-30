@@ -839,6 +839,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
     const m = useStore((s) => s.models.find((x) => x.id === modelId));
     const allModels = useStore((s) => s.models);
     const setFailures = useStore((s) => s.setFailures);
+    const [horizonH, setHorizonH] = useState<number>(8760); // 1 год по умолчанию
     if (!m) return null;
     const failures = m.failures ?? [];
 
@@ -851,7 +852,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
       });
       const parsed: import('../domain/types').FailureRecord[] = [];
       for (const r of rows) {
-        // Эвристика: ищем колонки с датой отказа / восстановления / простоем.
+        // Эвристика: ищем колонки с датой отказа / восстановления / простоем / узлом.
         const keys = Object.keys(r);
         const find = (re: RegExp) =>
           keys.find((k) => re.test(k.toLowerCase().trim()));
@@ -859,10 +860,12 @@ export function ModelCard({ modelId }: { modelId: string }) {
         const cRestored = find(/восстан|конец|оконч|устран/);
         const cDur = find(/простой|длительн|часов/);
         const cDesc = find(/описан|тип|причин|дефект/);
+        const cComp = find(/узел|компонент|деталь|элемент/);
         const failedRaw = cFailed ? r[cFailed] : undefined;
         const restoredRaw = cRestored ? r[cRestored] : undefined;
         const durRaw = cDur ? r[cDur] : undefined;
         const descRaw = cDesc ? r[cDesc] : undefined;
+        const compRaw = cComp ? r[cComp] : undefined;
         const failedAt = excelDate(failedRaw);
         if (!failedAt) continue;
         parsed.push({
@@ -880,18 +883,60 @@ export function ModelCard({ modelId }: { modelId: string }) {
                 ? parseFloat(String(durRaw))
                 : undefined,
           description: descRaw ? String(descRaw).trim() || undefined : undefined,
+          component: compRaw ? String(compRaw).trim() || undefined : undefined,
         });
       }
       if (!parsed.length) {
         alert(
-          'Не удалось распознать ни одной строки. Ожидаются колонки: «Дата отказа», «Дата восстановления» (опц.), «Описание».',
+          'Не удалось распознать ни одной строки. Ожидаются колонки: «Дата отказа», «Дата восстановления» (опц.), «Описание», «Узел» (опц.).',
         );
         return;
       }
-      setFailures(modelId, parsed);
+      setFailures(modelId, [...failures, ...parsed]);
     };
 
+    const addRow = () => {
+      const today = new Date().toISOString().slice(0, 10);
+      setFailures(modelId, [
+        ...failures,
+        {
+          id: 'f-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6),
+          failedAt: today + 'T00:00:00.000Z',
+        },
+      ]);
+    };
+    const updateRow = (
+      id: string,
+      patch: Partial<import('../domain/types').FailureRecord>,
+    ) => {
+      setFailures(
+        modelId,
+        failures.map((f) => (f.id === id ? { ...f, ...patch } : f)),
+      );
+    };
+    const removeRow = (id: string) =>
+      setFailures(modelId, failures.filter((f) => f.id !== id));
+
     const stats = computeReliability(failures);
+    // Разбивка отказов по компонентам.
+    const byComp = new Map<string, { count: number; totalDowntime: number }>();
+    for (const f of failures) {
+      const c = (f.component ?? '').trim() || '(не указан)';
+      const cur = byComp.get(c) ?? { count: 0, totalDowntime: 0 };
+      cur.count += 1;
+      const dt = computeDowntime(f);
+      if (dt) cur.totalDowntime += dt;
+      byComp.set(c, cur);
+    }
+    const compBreakdown = Array.from(byComp.entries())
+      .map(([c, v]) => ({ component: c, ...v }))
+      .sort((a, b) => b.count - a.count);
+
+    // R(t) = exp(-λt): вероятность безотказной работы за t часов.
+    const rOfT =
+      stats.failureRatePerHour != null && horizonH > 0
+        ? Math.exp(-stats.failureRatePerHour * horizonH)
+        : undefined;
 
     // Аналог: оценка через модели того же класса+подкласса.
     const analogs = allModels.filter(
@@ -905,10 +950,37 @@ export function ModelCard({ modelId }: { modelId: string }) {
       m: x,
       ...computeReliability(x.failures ?? []),
     }));
+    // Сводная оценка по аналогам: взвешиваем по количеству отказов.
+    const analogAgg = (() => {
+      if (analogStats.length === 0) return null;
+      let wN = 0;
+      let mtbfSum = 0;
+      let mtbfN = 0;
+      let mttrSum = 0;
+      let mttrN = 0;
+      for (const a of analogStats) {
+        wN += a.count;
+        if (a.mtbfHours != null) {
+          mtbfSum += a.mtbfHours * a.count;
+          mtbfN += a.count;
+        }
+        if (a.mttrHours != null) {
+          mttrSum += a.mttrHours * a.count;
+          mttrN += a.count;
+        }
+      }
+      const mtbf = mtbfN > 0 ? mtbfSum / mtbfN : undefined;
+      const mttr = mttrN > 0 ? mttrSum / mttrN : undefined;
+      const kg =
+        mtbf != null && mttr != null ? mtbf / (mtbf + mttr) : undefined;
+      const lambda = mtbf != null && mtbf > 0 ? 1 / mtbf : undefined;
+      const rT = lambda != null ? Math.exp(-lambda * horizonH) : undefined;
+      return { totalFailures: wN, mtbf, mttr, kg, lambda, rT };
+    })();
 
     return (
       <div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <label className="btn-as-label">
             <input
               type="file"
@@ -922,10 +994,19 @@ export function ModelCard({ modelId }: { modelId: string }) {
                 }
               }}
             />
-            история отказов…
+            загрузить историю отказов…
           </label>
+          <button onClick={addRow}>+ отказ</button>
           {failures.length > 0 && (
-            <button onClick={() => setFailures(modelId, [])}>×</button>
+            <button
+              onClick={() => {
+                if (confirm('Очистить всю историю отказов?'))
+                  setFailures(modelId, []);
+              }}
+              title="Очистить всю историю"
+            >
+              × очистить
+            </button>
           )}
           <span className="muted small">
             {failures.length} отказ(ов){' '}
@@ -933,27 +1014,47 @@ export function ModelCard({ modelId }: { modelId: string }) {
               ? `· период наблюдения ${stats.spanDays.toFixed(0)} дн`
               : ''}
           </span>
+          <span className="spacer" />
+          <label className="small muted" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            Горизонт R(t):
+            <input
+              type="number"
+              min={1}
+              step={1}
+              value={horizonH}
+              onChange={(e) =>
+                setHorizonH(Math.max(1, Number(e.target.value) || 0))
+              }
+              style={{ width: 90 }}
+            />
+            ч
+            <select
+              value={horizonH}
+              onChange={(e) => setHorizonH(Number(e.target.value))}
+              title="Предустановки"
+            >
+              <option value={720}>1 мес</option>
+              <option value={2160}>3 мес</option>
+              <option value={4380}>6 мес</option>
+              <option value={8760}>1 год</option>
+              <option value={17520}>2 года</option>
+              <option value={43800}>5 лет</option>
+            </select>
+          </label>
         </div>
+
         {failures.length === 0 && (
           <div className="muted stub" style={{ marginTop: 6 }}>
-            Нет данных. Загрузите Excel с колонками: «Дата отказа», «Дата
-            восстановления», «Описание». MTBF/MTTR посчитаются автоматически.
-            Если истории нет — внизу показаны параметры по аналогам.
+            Нет данных. Загрузите Excel (колонки: «Дата отказа», «Дата восстановления», «Описание», «Узел») или добавьте записи вручную кнопкой «+ отказ».
+            Если истории нет — ниже показаны параметры по моделям-аналогам.
           </div>
         )}
+
         {failures.length > 0 && (
           <div style={{ marginTop: 8 }}>
-            <div style={{ display: 'flex', gap: 16, marginBottom: 8 }}>
-              <Stat
-                label="MTBF"
-                value={fmtHours(stats.mtbfHours)}
-                hint="среднее время между отказами"
-              />
-              <Stat
-                label="MTTR"
-                value={fmtHours(stats.mttrHours)}
-                hint="среднее время восстановления"
-              />
+            <div style={{ display: 'flex', gap: 16, marginBottom: 8, flexWrap: 'wrap' }}>
+              <Stat label="MTBF" value={fmtHours(stats.mtbfHours)} hint="среднее время между отказами" />
+              <Stat label="MTTR" value={fmtHours(stats.mttrHours)} hint="среднее время восстановления" />
               <Stat
                 label="λ"
                 value={
@@ -961,28 +1062,33 @@ export function ModelCard({ modelId }: { modelId: string }) {
                     ? stats.failureRatePerHour.toExponential(2)
                     : '—'
                 }
-                hint="интенсивность отказов, 1/ч"
+                hint="интенсивность отказов, 1/ч (λ = 1/MTBF)"
               />
               <Stat
                 label="Кг"
                 value={
                   stats.mtbfHours != null && stats.mttrHours != null
-                    ? (
-                        stats.mtbfHours /
-                        (stats.mtbfHours + stats.mttrHours)
-                      ).toFixed(4)
+                    ? (stats.mtbfHours / (stats.mtbfHours + stats.mttrHours)).toFixed(4)
                     : '—'
                 }
                 hint="коэффициент готовности = MTBF / (MTBF + MTTR)"
               />
+              <Stat
+                label={`R(${fmtHoursCompact(horizonH)})`}
+                value={rOfT != null ? (rOfT * 100).toFixed(2) + '%' : '—'}
+                hint={`вероятность безотказной работы за ${horizonH.toLocaleString('ru')} ч: R(t) = exp(−λt)`}
+              />
             </div>
+
             <table className="models">
               <thead>
                 <tr>
-                  <th>Дата отказа</th>
-                  <th>Дата восстановления</th>
-                  <th>Простой, ч</th>
+                  <th style={{ width: 120 }}>Дата отказа</th>
+                  <th style={{ width: 120 }}>Дата восстановл.</th>
+                  <th style={{ width: 80 }}>Простой, ч</th>
+                  <th style={{ width: 140 }}>Узел</th>
                   <th>Описание</th>
+                  <th style={{ width: 40 }}></th>
                 </tr>
               </thead>
               <tbody>
@@ -991,50 +1097,200 @@ export function ModelCard({ modelId }: { modelId: string }) {
                   .sort((a, b) => a.failedAt.localeCompare(b.failedAt))
                   .map((f) => (
                     <tr key={f.id}>
-                      <td className="mono">{f.failedAt.slice(0, 10)}</td>
-                      <td className="mono">
-                        {f.restoredAt?.slice(0, 10) ?? '—'}
+                      <td>
+                        <input
+                          type="date"
+                          value={f.failedAt.slice(0, 10)}
+                          onChange={(e) =>
+                            updateRow(f.id, {
+                              failedAt: e.target.value
+                                ? e.target.value + 'T00:00:00.000Z'
+                                : f.failedAt,
+                            })
+                          }
+                        />
                       </td>
-                      <td className="mono">
-                        {f.downtimeHours != null
-                          ? f.downtimeHours.toFixed(1)
-                          : computeDowntime(f)?.toFixed(1) ?? '—'}
+                      <td>
+                        <input
+                          type="date"
+                          value={f.restoredAt?.slice(0, 10) ?? ''}
+                          onChange={(e) =>
+                            updateRow(f.id, {
+                              restoredAt: e.target.value
+                                ? e.target.value + 'T00:00:00.000Z'
+                                : undefined,
+                            })
+                          }
+                        />
                       </td>
-                      <td>{f.description ?? ''}</td>
+                      <td>
+                        <input
+                          type="number"
+                          step="0.1"
+                          min={0}
+                          style={{ width: 70 }}
+                          value={
+                            f.downtimeHours != null
+                              ? f.downtimeHours
+                              : computeDowntime(f) ?? ''
+                          }
+                          onChange={(e) =>
+                            updateRow(f.id, {
+                              downtimeHours: e.target.value
+                                ? Math.max(0, parseFloat(e.target.value))
+                                : undefined,
+                            })
+                          }
+                        />
+                      </td>
+                      <td>
+                        <input
+                          value={f.component ?? ''}
+                          placeholder="насос, подшипник…"
+                          onChange={(e) =>
+                            updateRow(f.id, { component: e.target.value || undefined })
+                          }
+                        />
+                      </td>
+                      <td>
+                        <input
+                          value={f.description ?? ''}
+                          onChange={(e) =>
+                            updateRow(f.id, { description: e.target.value || undefined })
+                          }
+                        />
+                      </td>
+                      <td>
+                        <button title="Удалить запись" onClick={() => removeRow(f.id)}>
+                          ×
+                        </button>
+                      </td>
                     </tr>
                   ))}
               </tbody>
             </table>
+
+            {compBreakdown.length > 0 && (
+              <div style={{ marginTop: 12 }}>
+                <div className="muted small" style={{ marginBottom: 4 }}>
+                  Отказы по узлам (TOP):
+                </div>
+                <table className="models">
+                  <thead>
+                    <tr>
+                      <th>Узел</th>
+                      <th style={{ width: 80 }}>Отказов</th>
+                      <th style={{ width: 80 }}>Доля</th>
+                      <th style={{ width: 120 }}>Суммарный простой, ч</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {compBreakdown.map((b) => (
+                      <tr key={b.component}>
+                        <td>{b.component}</td>
+                        <td className="mono">{b.count}</td>
+                        <td className="mono">
+                          {((b.count / failures.length) * 100).toFixed(0)}%
+                        </td>
+                        <td className="mono">
+                          {b.totalDowntime > 0 ? b.totalDowntime.toFixed(1) : '—'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         )}
-        {failures.length === 0 && analogStats.length > 0 && (
-          <div style={{ marginTop: 12 }}>
+
+        {analogStats.length > 0 && (
+          <div style={{ marginTop: 16 }}>
             <div className="muted small" style={{ marginBottom: 4 }}>
-              Оценка по аналогам ({analogStats.length} моделей того же
-              класса/подкласса):
+              {failures.length === 0
+                ? `Оценка по аналогам (${analogStats.length} моделей ${m.className ?? ''}${m.subclassName ? ' / ' + m.subclassName : ''}):`
+                : `Сравнение с аналогами (${analogStats.length}):`}
             </div>
             <table className="models">
               <thead>
                 <tr>
                   <th>Модель</th>
-                  <th>Отказов</th>
-                  <th>MTBF</th>
-                  <th>MTTR</th>
+                  <th style={{ width: 60 }}>Отказов</th>
+                  <th style={{ width: 90 }}>MTBF</th>
+                  <th style={{ width: 90 }}>MTTR</th>
+                  <th style={{ width: 80 }}>Кг</th>
+                  <th style={{ width: 100 }}>λ, 1/ч</th>
                 </tr>
               </thead>
               <tbody>
-                {analogStats.map(({ m: am, count, mtbfHours, mttrHours }) => (
-                  <tr key={am.id}>
-                    <td className="mono">{am.normalizedCode || am.rawCode}</td>
-                    <td>{count}</td>
-                    <td>{fmtHours(mtbfHours)}</td>
-                    <td>{fmtHours(mttrHours)}</td>
+                {analogStats.map(
+                  ({
+                    m: am,
+                    count,
+                    mtbfHours,
+                    mttrHours,
+                    failureRatePerHour,
+                  }) => {
+                    const kg =
+                      mtbfHours != null && mttrHours != null
+                        ? mtbfHours / (mtbfHours + mttrHours)
+                        : undefined;
+                    return (
+                      <tr key={am.id}>
+                        <td className="mono">{am.normalizedCode || am.rawCode}</td>
+                        <td className="mono">{count}</td>
+                        <td className="mono">{fmtHours(mtbfHours)}</td>
+                        <td className="mono">{fmtHours(mttrHours)}</td>
+                        <td className="mono">
+                          {kg != null ? kg.toFixed(4) : '—'}
+                        </td>
+                        <td className="mono">
+                          {failureRatePerHour != null
+                            ? failureRatePerHour.toExponential(2)
+                            : '—'}
+                        </td>
+                      </tr>
+                    );
+                  },
+                )}
+                {analogAgg && (
+                  <tr style={{ background: 'var(--bg-alt, #f7f7f7)', fontWeight: 600 }}>
+                    <td>Сводно (взвеш.)</td>
+                    <td className="mono">{analogAgg.totalFailures}</td>
+                    <td className="mono">{fmtHours(analogAgg.mtbf)}</td>
+                    <td className="mono">{fmtHours(analogAgg.mttr)}</td>
+                    <td className="mono">
+                      {analogAgg.kg != null ? analogAgg.kg.toFixed(4) : '—'}
+                    </td>
+                    <td className="mono">
+                      {analogAgg.lambda != null
+                        ? analogAgg.lambda.toExponential(2)
+                        : '—'}
+                    </td>
                   </tr>
-                ))}
+                )}
               </tbody>
             </table>
+            {analogAgg && analogAgg.rT != null && (
+              <div className="muted small" style={{ marginTop: 4 }}>
+                R({fmtHoursCompact(horizonH)}) по аналогам ≈{' '}
+                <b>{(analogAgg.rT * 100).toFixed(2)}%</b>
+                {failures.length === 0 && ' — используйте как ориентир, пока нет собственной статистики.'}
+              </div>
+            )}
           </div>
         )}
+
+        <details className="diag" style={{ marginTop: 12 }}>
+          <summary>Формулы и обозначения</summary>
+          <ul className="small">
+            <li>MTBF — среднее время между отказами, ч</li>
+            <li>MTTR — среднее время восстановления, ч</li>
+            <li>λ = 1 / MTBF — интенсивность отказов, 1/ч</li>
+            <li>Кг = MTBF / (MTBF + MTTR) — коэффициент готовности</li>
+            <li>R(t) = exp(−λ · t) — вероятность безотказной работы за t часов</li>
+          </ul>
+        </details>
       </div>
     );
   }
@@ -3548,6 +3804,18 @@ function fmtHours(h: number | undefined | null): string {
   const months = days / 30;
   if (months < 24) return `${round(months)} мес`;
   return `${round(months / 12)} лет`;
+}
+
+function fmtHoursCompact(h: number): string {
+  if (h < 24) return `${h} ч`;
+  const d = h / 24;
+  if (d < 60) return `${round(d)} дн`;
+  const y = h / 8760;
+  if (y >= 1) {
+    return y === Math.floor(y) ? `${y} г` : `${y.toFixed(1)} г`;
+  }
+  const mo = h / 730;
+  return `${round(mo)} мес`;
 }
 
 function computeDowntime(
