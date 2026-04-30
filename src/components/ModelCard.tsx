@@ -28,6 +28,7 @@ import { extractTextFromFile, extractTextFromUrl } from '../parsers/docText';
 import { aiProvider } from '../domain/ai';
 import { getApiKey } from '../domain/openai';
 import { loadModelsDb, lookupModel } from '../data/modelsDb';
+import { searchGosts, matchGostForTmc, type GostRef } from '../data/gostRefs';
 import { autoImportFile } from '../parsers/autoImport';
 import * as XLSX from 'xlsx';
 
@@ -129,6 +130,88 @@ export function ModelCard({ modelId }: { modelId: string }) {
   const sub = cls?.subclasses.find((s) => s.name === model.subclassName);
   const code = model.normalizedCode || model.rawCode;
 
+  /**
+   * Шапка-напоминание (созвон 28.04.2026: «добавить напоминания для
+   * пользователя»). Считаем по каждой вкладке количество незаполненных полей,
+   * которые блокируют переход дальше по workflow Простоев.Нет:
+   *   – нет ВВ → ярко-оранжевая полоса (заказчик: «обязательно заполнить ВВ»);
+   *   – незаполненные приоритетные характеристики → счётчик;
+   *   – пустые ячейки техкарты → «не должно быть пустых клеток»;
+   *   – BOM без привязки к ВВ → «подсветить что без привязки к ВВ».
+   * Если всё в порядке — лента скрывается.
+   */
+  type Reminder = { tab: Tab; label: string; count: number; severe?: boolean };
+  const reminders: Reminder[] = [];
+  const priorityKeysAll: string[] = [
+    ...((cls?.priorityChars ?? []).map((p) => p.key)),
+    ...((sub?.priorityChars ?? []).map((p) => p.key)),
+  ];
+  const priorityKeysSet = Array.from(new Set(priorityKeysAll));
+  const charsByKey = new Map(
+    (model.characteristics ?? []).map((c) => [c.key, c]),
+  );
+  const missingPriorityCount = priorityKeysSet.filter((k) => {
+    const c = charsByKey.get(k);
+    return !c || (!c.valueRaw && c.valueNum == null);
+  }).length;
+  if (missingPriorityCount > 0) {
+    reminders.push({
+      tab: 'chars',
+      label: `${missingPriorityCount} приоритетных характеристик`,
+      count: missingPriorityCount,
+    });
+  }
+  if (!model.actions || model.actions.length === 0) {
+    reminders.push({
+      tab: 'actions',
+      label: 'нет ВВ — обязательно заполнить',
+      count: 1,
+      severe: true,
+    });
+  }
+  // Подсчёт пустых клеток техкарты (только обязательные поля для готовой ТК).
+  let emptyTcCells = 0;
+  for (const r of model.techCard ?? []) {
+    if (!r.isAggregate && !r.component) emptyTcCells++;
+    if (!r.operation) emptyTcCells++;
+    if (!r.actionId) emptyTcCells++;
+    if (!r.specialty) emptyTcCells++;
+    if (r.laborHours == null) emptyTcCells++;
+  }
+  if (emptyTcCells > 0) {
+    reminders.push({
+      tab: 'techcards',
+      label: `${emptyTcCells} пустых ячеек ТК`,
+      count: emptyTcCells,
+    });
+  }
+  // BOM без привязки к ВВ — на спецификации помечается оранжевой рамкой.
+  let bomWithoutVv = 0;
+  for (const r of model.techCard ?? []) {
+    if (r.tmcName && !r.actionId) bomWithoutVv++;
+  }
+  if (bomWithoutVv > 0) {
+    reminders.push({
+      tab: 'specs',
+      label: `${bomWithoutVv} BOM без привязки к ВВ`,
+      count: bomWithoutVv,
+    });
+  }
+  // История отказов — для расчёта надёжности.
+  if (
+    !model.failures ||
+    model.failures.length === 0
+  ) {
+    // Неблокирующее, не показываем как severe.
+    if (model.actions && model.actions.length > 0) {
+      reminders.push({
+        tab: 'reliability',
+        label: 'нет истории отказов (можно оценить по аналогам)',
+        count: 0,
+      });
+    }
+  }
+
   return (
     <div className={`card model-card${fullscreen ? ' is-fullscreen' : ''}`}>
       <div className="card-head">
@@ -180,6 +263,33 @@ export function ModelCard({ modelId }: { modelId: string }) {
           </button>
         ))}
       </nav>
+
+      {reminders.length > 0 && (
+        <div
+          className={`reminder-ribbon ${
+            reminders.some((r) => r.severe) ? 'severe' : ''
+          }`}
+          role="status"
+          aria-live="polite"
+        >
+          <span className="reminder-icon" aria-hidden>
+            🔔
+          </span>
+          <span className="muted small">Не заполнено:</span>
+          {reminders.map((r, i) => (
+            <button
+              key={r.tab + i}
+              className={`reminder-chip ${r.severe ? 'severe' : ''}`}
+              onClick={() => setTab(r.tab)}
+              title={`Перейти на вкладку «${
+                TABS.find((x) => x.id === r.tab)?.label
+              }»`}
+            >
+              {r.label}
+            </button>
+          ))}
+        </div>
+      )}
 
       <div className="tab-body">
         {tab === 'props' && (
@@ -233,6 +343,36 @@ export function ModelCard({ modelId }: { modelId: string }) {
      * пользователь может показать через тогглер для контроля.
      */
     const [hideFasteners, setHideFasteners] = useState<boolean>(true);
+    /**
+     * Каскад «🔎 Сверить элементы» (созвон 28.04.2026: «проверка на правду
+     * элементов и подэлементов: 1. поиск по модели 2. по похожей модели
+     * 3. по классу/подклассу. И финальная сверка»).
+     */
+    const [verifyOpen, setVerifyOpen] = useState(false);
+    const [verifyBusy, setVerifyBusy] = useState(false);
+    type VerifyResult = {
+      add: Array<{
+        component: string;
+        subcomponent?: string;
+        stage: 'model' | 'similar' | 'class' | 'final';
+        reason?: string;
+        sourceUrl?: string;
+      }>;
+      rename: Array<{
+        from: string;
+        to: string;
+        stage: 'model' | 'similar' | 'class' | 'final';
+        reason?: string;
+      }>;
+      remove: Array<{
+        component: string;
+        subcomponent?: string;
+        reason?: string;
+      }>;
+      confidence?: number;
+      sourceUrl?: string;
+    };
+    const [verifyResult, setVerifyResult] = useState<VerifyResult | null>(null);
     if (!m) return null;
     const allRows = m.techCard ?? [];
     /**
@@ -489,10 +629,15 @@ export function ModelCard({ modelId }: { modelId: string }) {
           return;
         }
         for (const r of result) {
+          // Помечаем ячейки Элемент / Подэлемент как заполненные ИИ —
+          // раскраска по столбцам (созвон 28.04.2026).
+          const cellSources: Record<string, 'ai'> = { component: 'ai' };
+          if (r.subcomponent) cellSources.subcomponent = 'ai';
           upsert(modelId, {
             component: r.component,
             subcomponent: r.subcomponent,
             source: 'ai',
+            cellSources,
           });
         }
       } catch (e) {
@@ -555,12 +700,19 @@ export function ModelCard({ modelId }: { modelId: string }) {
           }
         }
         for (const r of result) {
+          const cellSources: Record<string, 'ai'> = {
+            component: 'ai',
+            operation: 'ai',
+          };
+          if (r.subcomponent) cellSources.subcomponent = 'ai';
+          if (r.workDescription) cellSources.workDescription = 'ai';
           upsert(modelId, {
             component: r.component,
             subcomponent: r.subcomponent,
             operation: r.operation,
             workDescription: r.workDescription,
             source: 'ai',
+            cellSources,
           });
         }
       } catch (e) {
@@ -630,13 +782,17 @@ export function ModelCard({ modelId }: { modelId: string }) {
           const match = byKey.get(k(r));
           if (match) {
             // Дозаполняем только пустые поля; источник существующей строки
-            // не меняем (её мог поставить эксперт).
+            // не меняем (её мог поставить эксперт). Однако для каждой
+            // заполненной нами ячейки помечаем `cellSources[field] = 'web'`,
+            // чтобы пользователь видел, что значение пришло из интернета.
             const patch: Partial<typeof match> = {};
+            const newCellSources: Record<string, 'web'> = {};
             const fillIfEmpty = <K extends keyof typeof match>(field: K, value: typeof match[K] | undefined) => {
               if (value === undefined || value === null || value === '') return;
               const cur = match[field];
               if (cur === undefined || cur === null || cur === '') {
                 patch[field] = value;
+                newCellSources[field as string] = 'web';
               }
             };
             fillIfEmpty('workDescription', r.workDescription);
@@ -653,10 +809,28 @@ export function ModelCard({ modelId }: { modelId: string }) {
             fillIfEmpty('ppe', r.ppe);
             fillIfEmpty('safety', r.safety);
             if (Object.keys(patch).length > 0) {
-              upsert(modelId, { id: match.id, ...patch });
+              upsert(modelId, {
+                id: match.id,
+                ...patch,
+                cellSources: { ...(match.cellSources ?? {}), ...newCellSources },
+              });
               updated++;
             }
           } else {
+            // Новая строка — все непустые поля помечаем как 'web'.
+            const cellSources: Record<string, 'web'> = {};
+            const fields: Array<keyof typeof r> = [
+              'component', 'subcomponent', 'operation', 'workDescription',
+              'laborHours', 'workers', 'specialty', 'qualification',
+              'totalLaborHours', 'tmcName', 'tmcKind', 'tmcUnit', 'tmcQty',
+              'tools', 'ppe', 'safety',
+            ];
+            for (const f of fields) {
+              const v = r[f];
+              if (v !== undefined && v !== null && v !== '') {
+                cellSources[f as string] = 'web';
+              }
+            }
             upsert(modelId, {
               component: r.component,
               subcomponent: r.subcomponent,
@@ -676,6 +850,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
               ppe: r.ppe,
               safety: r.safety,
               source: 'web',
+              cellSources,
             });
             created++;
           }
@@ -690,6 +865,139 @@ export function ModelCard({ modelId }: { modelId: string }) {
       } finally {
         setAiBusy(false);
       }
+    };
+
+    /**
+     * Каскад «🔎 Сверка элементов и подэлементов» — четырёхэтапная проверка
+     * состава техкарты (созвон 28.04.2026): по модели → по похожей →
+     * по классу/подклассу → финальная сверка. Результат показывается в
+     * модалке с возможностью применить рекомендации выборочно.
+     */
+    const verifyElementsCascade = async () => {
+      if (verifyBusy) return;
+      if (!hasKey) {
+        setAiErr('Укажите OpenAI ключ в «Настройках».');
+        return;
+      }
+      setVerifyBusy(true);
+      setAiErr('');
+      try {
+        // Аналоги — модели того же класса/подкласса в текущем сторе.
+        // Используются провайдером для опоры на существующие изделия.
+        const allModels = useStore.getState().models;
+        const sameClass = allModels.filter(
+          (x) => x.id !== m.id && x.className === m.className,
+        );
+        const sameSub = sameClass.filter((x) => x.subclassName === m.subclassName);
+        const analogList = (sameSub.length > 0 ? sameSub : sameClass)
+          .slice(0, 6)
+          .map((x) => ({ code: x.normalizedCode || x.rawCode }));
+        const provider = aiProvider();
+        if (!provider.verifyElementsAndSubelements) {
+          setAiErr('Этот ИИ-провайдер не поддерживает каскадную сверку.');
+          setVerifyBusy(false);
+          return;
+        }
+        // Берём текущие уникальные пары элемент+подэлемент (включая фильтр
+        // крепежа — тот же режим, что показан пользователю в таблице).
+        const currentPairs = new Map<
+          string,
+          { component: string; subcomponent?: string }
+        >();
+        for (const r of allRows) {
+          if (!r.component?.trim()) continue;
+          if (isFastenerRow(r)) continue;
+          const key = `${r.component.trim()}|${r.subcomponent?.trim() ?? ''}`;
+          if (!currentPairs.has(key)) {
+            currentPairs.set(key, {
+              component: r.component.trim(),
+              subcomponent: r.subcomponent?.trim() || undefined,
+            });
+          }
+        }
+        const result = await provider.verifyElementsAndSubelements({
+          model: {
+            className: m.className,
+            subclassName: m.subclassName,
+            normalizedCode: m.normalizedCode,
+            rawCode: m.rawCode,
+          },
+          current: Array.from(currentPairs.values()),
+          analogs: analogList,
+        });
+        setVerifyResult(result);
+        setVerifyOpen(true);
+      } catch (e) {
+        setAiErr('Ошибка ИИ: ' + (e instanceof Error ? e.message : String(e)));
+      } finally {
+        setVerifyBusy(false);
+      }
+    };
+
+    /** Применить выбранные пользователем рекомендации каскада. */
+    const applyVerifySelection = (
+      sel: { add: Set<number>; rename: Set<number>; remove: Set<number> },
+    ) => {
+      if (!verifyResult) return;
+      // 1. ADD — добавляем новые строки с source='ai' и cellSources на
+      //    Элемент / Подэлемент.
+      for (const i of sel.add) {
+        const item = verifyResult.add[i];
+        if (!item) continue;
+        const cellSources: Record<string, 'ai'> = { component: 'ai' };
+        if (item.subcomponent) cellSources.subcomponent = 'ai';
+        upsert(modelId, {
+          component: item.component,
+          subcomponent: item.subcomponent,
+          source: 'ai',
+          cellSources,
+        });
+      }
+      // 2. RENAME — заменяем component там, где совпадает текст `from`.
+      const renamePairs = Array.from(sel.rename)
+        .map((i) => verifyResult.rename[i])
+        .filter((x): x is NonNullable<typeof x> => !!x);
+      if (renamePairs.length > 0) {
+        const next = (m.techCard ?? []).map((row) => {
+          const r1 = renamePairs.find(
+            (rn) => rn.from.toLowerCase() === (row.component ?? '').toLowerCase(),
+          );
+          if (r1) {
+            const cs = { ...(row.cellSources ?? {}), component: 'ai' as const };
+            return { ...row, component: r1.to, cellSources: cs };
+          }
+          const r2 = renamePairs.find(
+            (rn) =>
+              rn.from.toLowerCase() === (row.subcomponent ?? '').toLowerCase(),
+          );
+          if (r2) {
+            const cs = {
+              ...(row.cellSources ?? {}),
+              subcomponent: 'ai' as const,
+            };
+            return { ...row, subcomponent: r2.to, cellSources: cs };
+          }
+          return row;
+        });
+        setTechCard(modelId, next);
+      }
+      // 3. REMOVE — удаляем строки по совпадению component+subcomponent.
+      const removePairs = Array.from(sel.remove)
+        .map((i) => verifyResult.remove[i])
+        .filter((x): x is NonNullable<typeof x> => !!x);
+      if (removePairs.length > 0) {
+        const next = (m.techCard ?? []).filter((row) => {
+          return !removePairs.some(
+            (rm) =>
+              rm.component.toLowerCase() === (row.component ?? '').toLowerCase() &&
+              (rm.subcomponent ?? '').toLowerCase() ===
+                (row.subcomponent ?? '').toLowerCase(),
+          );
+        });
+        setTechCard(modelId, next);
+      }
+      setVerifyOpen(false);
+      setVerifyResult(null);
     };
 
     return (
@@ -788,6 +1096,17 @@ export function ModelCard({ modelId }: { modelId: string }) {
             }
           >
             {aiBusy ? '…ИИ работает' : '🌐 Поиск в интернете'}
+          </button>
+          <button
+            onClick={verifyElementsCascade}
+            disabled={verifyBusy || !hasKey}
+            title={
+              !hasKey
+                ? 'Укажите OpenAI ключ в «Настройках».'
+                : 'Каскадная сверка состава: 1) поиск по модели, 2) по похожей модели, 3) по классу/подклассу, 4) финальная сверка. ИИ предложит что добавить, переименовать или убрать.'
+            }
+          >
+            {verifyBusy ? '…сверка' : '🔎 Сверить'}
           </button>
           <button
             onClick={toggleFullscreen}
@@ -890,6 +1209,17 @@ export function ModelCard({ modelId }: { modelId: string }) {
                 </tr>
               )}
               {rows.map((r) => {
+                /**
+                 * Раскраска ячеек по источнику (созвон 28.04.2026:
+                 * «раскраска тех карты по столбцам ИИ vs человек»). Если
+                 * `cellSources[field]` есть — используем его; иначе берём
+                 * общий `source` строки, чтобы старые данные оставались
+                 * видимы в одном цвете.
+                 */
+                const cellSrc = (field: string): string => {
+                  const s = r.cellSources?.[field] ?? r.source;
+                  return s ? `cell-src-${s}` : '';
+                };
                 const specOptions =
                   r.specialty &&
                   specs.find((s) => s.name === r.specialty)?.qualifications;
@@ -910,7 +1240,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
                 const subWarn = r.subcomponent ? normElement(r.subcomponent).warnings.length > 0 : false;
                 return (
                   <tr key={r.id} title={rowTitle || undefined} className={`tc-row src-${r.source}`}>
-                    <td>
+                    <td className={cellSrc('component')}>
                       {r.isAggregate ? (
                         <span className="muted small" title="Операция на сам агрегат">⟨агрегат⟩</span>
                       ) : (
@@ -931,7 +1261,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
                         />
                       )}
                     </td>
-                    <td>
+                    <td className={cellSrc('subcomponent')}>
                       {r.isAggregate ? (
                         <span className="muted small">—</span>
                       ) : (
@@ -952,7 +1282,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
                         />
                       )}
                     </td>
-                    <td>
+                    <td className={cellSrc('operation')}>
                       <input
                         list={`ops-${modelId}`}
                         value={r.operation ?? ''}
@@ -969,7 +1299,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
                         }}
                       />
                     </td>
-                    <td>
+                    <td className={cellSrc('actionId')}>
                       <select
                         value={r.actionId ?? ''}
                         onChange={(e) =>
@@ -996,7 +1326,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
                         return a?.periodHours ? a.periodHours : '—';
                       })()}
                     </td>
-                    <td>
+                    <td className={cellSrc('specialty')}>
                       <input
                         list={`specs-${modelId}`}
                         value={r.specialty ?? ''}
@@ -1008,7 +1338,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
                         }
                       />
                     </td>
-                    <td>
+                    <td className={cellSrc('qualification')}>
                       {specOptions && specOptions.length ? (
                         <select
                           value={r.qualification ?? ''}
@@ -1038,7 +1368,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
                         />
                       )}
                     </td>
-                    <td>
+                    <td className={cellSrc('laborHours')}>
                       <input
                         type="number"
                         step="0.1"
@@ -1059,7 +1389,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
                         }
                       />
                     </td>
-                    <td>
+                    <td className={cellSrc('tmcName')}>
                       <input
                         value={r.tmcName ?? ''}
                         onChange={(e) =>
@@ -1169,6 +1499,16 @@ export function ModelCard({ modelId }: { modelId: string }) {
             </div>
           );
         })()}
+        {verifyOpen && verifyResult && (
+          <VerifyCascadeModal
+            result={verifyResult}
+            onClose={() => {
+              setVerifyOpen(false);
+              setVerifyResult(null);
+            }}
+            onApply={applyVerifySelection}
+          />
+        )}
       </div>
     );
   }
@@ -1746,6 +2086,38 @@ export function ModelCard({ modelId }: { modelId: string }) {
   function AnalogsTab({ modelId }: { modelId: string }) {
     const m = useStore((s) => s.models.find((x) => x.id === modelId));
     const allModels = useStore((s) => s.models);
+    /**
+     * Аналоги, найденные через интернет (созвон 28.04.2026: «поиск аналогов
+     * по интернету в окне аналоги»). Локальное состояние — пользователь
+     * нажимает кнопку «🌐 Поиск в интернете», ИИ возвращает 3-6 моделей,
+     * мы вмёрживаем их в таблицу как виртуальные строки.
+     */
+    type WebAnalog = {
+      code: string;
+      manufacturer?: string;
+      characteristics: Array<{ key: string; valueRaw: string; unit?: string }>;
+      reason?: string;
+      sourceUrl?: string;
+    };
+    const [webAnalogs, setWebAnalogs] = useState<WebAnalog[]>([]);
+    const [webBusy, setWebBusy] = useState(false);
+    const [webErr, setWebErr] = useState('');
+    /**
+     * Ориентация таблицы (созвон 28.04.2026: «в окне аналоги разделить:
+     * сначала ХАРАКТЕРИСТИКА — МОДЕЛИ»). По умолчанию — характеристики
+     * по строкам и модели по столбцам (классическая ориентация для
+     * специалиста ТОиР). Альтернатива — модели по строкам.
+     */
+    const [orientation, setOrientation] = useState<
+      'chars-rows' | 'models-rows'
+    >('chars-rows');
+    /** Источник-попап для конкретного аналога (созвон: «источники указывать
+     * по кнопке»). null = закрыт. */
+    const [sourcePopup, setSourcePopup] = useState<{
+      code: string;
+      reason?: string;
+      sourceUrl?: string;
+    } | null>(null);
     if (!m) return null;
     if (!m.className) {
       return (
@@ -1809,15 +2181,6 @@ export function ModelCard({ modelId }: { modelId: string }) {
       .sort((a, b) => b.score - a.score)
       .slice(0, 8);
 
-    if (ranked.length === 0) {
-      return (
-        <div className="muted stub">
-          В системе нет других моделей класса «{m.className}»
-          {m.subclassName ? ` / «${m.subclassName}»` : ''}.
-        </div>
-      );
-    }
-
     // Целевая единица (из приоритетных характеристик класса/подкласса).
     const targetUnitFor = (key: string): string | undefined => {
       const inSub = (sub?.priorityChars ?? []).find((p) => p.key === key);
@@ -1826,13 +2189,181 @@ export function ModelCard({ modelId }: { modelId: string }) {
       return inCls?.unit;
     };
 
+    /**
+     * Поиск аналогов в интернете через ИИ. Объединяется с локальной базой —
+     * найденные модели появляются как дополнительные столбцы в таблице
+     * сравнения (созвон 28.04.2026).
+     */
+    const searchWebAnalogs = async () => {
+      if (webBusy) return;
+      if (!getApiKey()) {
+        setWebErr('Укажите OpenAI ключ в «Настройках».');
+        return;
+      }
+      const provider = aiProvider();
+      if (!provider.searchAnalogsFromWeb) {
+        setWebErr('Этот ИИ-провайдер не поддерживает поиск аналогов в интернете.');
+        return;
+      }
+      setWebBusy(true);
+      setWebErr('');
+      try {
+        const result = await provider.searchAnalogsFromWeb({
+          model: {
+            className: m.className,
+            subclassName: m.subclassName,
+            normalizedCode: m.normalizedCode,
+            rawCode: m.rawCode,
+          },
+          keys: priorityKeys.map((k) => ({
+            key: k,
+            unit: targetUnitFor(k),
+          })),
+        });
+        if (result.length === 0) {
+          setWebErr(
+            'ИИ не нашёл аналогов. Уточните класс/подкласс или приоритетные характеристики.',
+          );
+        } else {
+          // Слияние по `code`: новые модели поверх старых web-результатов.
+          const byCode = new Map<string, WebAnalog>();
+          for (const w of webAnalogs) byCode.set(w.code, w);
+          for (const r of result) byCode.set(r.code, r);
+          setWebAnalogs(Array.from(byCode.values()));
+        }
+      } catch (e) {
+        setWebErr('Ошибка ИИ: ' + (e instanceof Error ? e.message : String(e)));
+      } finally {
+        setWebBusy(false);
+      }
+    };
+
+    // Если совсем нечего показывать — заглушка с кнопкой поиска в интернете.
+    if (ranked.length === 0 && webAnalogs.length === 0) {
+      return (
+        <div>
+          <div className="muted stub">
+            В системе нет других моделей класса «{m.className}»
+            {m.subclassName ? ` / «${m.subclassName}»` : ''}.
+            {' '}Можно поискать аналоги в интернете через ИИ.
+          </div>
+          <div style={{ marginTop: 8 }}>
+            <button onClick={searchWebAnalogs} disabled={webBusy || !getApiKey()}>
+              {webBusy ? '…ИИ ищет' : '🌐 Поиск аналогов в интернете'}
+            </button>
+          </div>
+          {webErr && (
+            <div className="warn-text small" style={{ marginTop: 6 }}>
+              {webErr}
+            </div>
+          )}
+        </div>
+      );
+    }
+
     const currentCode = m.normalizedCode || m.rawCode;
+    /**
+     * Объединённый список столбцов-аналогов: сначала из локальной базы
+     * (ranked), затем из интернет-поиска (webAnalogs). Каждому даём общий
+     * интерфейс {key, code, getChar(key), reason?, sourceUrl?}.
+     */
+    type DisplayAnalog =
+      | {
+          kind: 'local';
+          key: string;
+          code: string;
+          getChar: (k: string) => Characteristic | undefined;
+          score: number;
+          attrKey: string;
+        }
+      | {
+          kind: 'web';
+          key: string;
+          code: string;
+          getChar: (k: string) => { valueRaw: string; unit?: string } | undefined;
+          reason?: string;
+          sourceUrl?: string;
+          attrKey: string;
+        };
+    const display: DisplayAnalog[] = [];
+    for (const r of ranked) {
+      const code = r.m.normalizedCode || r.m.rawCode;
+      display.push({
+        kind: 'local',
+        key: 'l-' + r.m.id,
+        code,
+        getChar: (k) => (r.m.characteristics ?? []).find((c) => c.key === k),
+        score: r.score,
+        attrKey: code,
+      });
+    }
+    for (const w of webAnalogs) {
+      // Не дублируем web-аналог, если такой код уже в ranked.
+      if (ranked.some((r) => (r.m.normalizedCode || r.m.rawCode) === w.code)) {
+        continue;
+      }
+      display.push({
+        kind: 'web',
+        key: 'w-' + w.code,
+        code: w.code,
+        getChar: (k) => w.characteristics.find((c) => c.key === k),
+        reason: w.reason,
+        sourceUrl: w.sourceUrl,
+        attrKey: w.code,
+      });
+    }
+
     return (
       <div>
         <div className="muted small" style={{ marginBottom: 6 }}>
-          Аналоги по {sameSub.length > 0 ? 'подклассу' : 'классу'}: {ranked.length}.
+          Аналоги по {sameSub.length > 0 ? 'подклассу' : 'классу'}: {ranked.length}
+          {webAnalogs.length > 0 ? ` · из интернета: ${webAnalogs.length}` : ''}.
           Сравнение по приоритетным характеристикам класса/подкласса.
         </div>
+        <div
+          className="row-flex small"
+          style={{ gap: 8, marginBottom: 6, flexWrap: 'wrap', alignItems: 'center' }}
+        >
+          <button
+            onClick={searchWebAnalogs}
+            disabled={webBusy || !getApiKey()}
+            title={
+              !getApiKey()
+                ? 'Укажите OpenAI ключ в «Настройках».'
+                : 'Поиск моделей-аналогов в открытых каталогах через ИИ. Найденные модели добавятся как дополнительные столбцы.'
+            }
+          >
+            {webBusy ? '…ИИ ищет' : '🌐 Поиск аналогов в интернете'}
+          </button>
+          {webAnalogs.length > 0 && (
+            <button
+              onClick={() => setWebAnalogs([])}
+              title="Убрать найденные через интернет аналоги из таблицы."
+            >
+              ✕ Убрать веб-аналоги
+            </button>
+          )}
+          <span className="muted small" style={{ marginLeft: 6 }}>
+            Ориентация:
+          </span>
+          <button
+            onClick={() =>
+              setOrientation((o) =>
+                o === 'chars-rows' ? 'models-rows' : 'chars-rows',
+              )
+            }
+            title="Поменять оси таблицы. По умолчанию: характеристики по строкам, модели по столбцам."
+          >
+            {orientation === 'chars-rows'
+              ? '⇄ ХАРАКТЕРИСТИКА × МОДЕЛИ'
+              : '⇄ МОДЕЛИ × ХАРАКТЕРИСТИКА'}
+          </button>
+        </div>
+        {webErr && (
+          <div className="warn-text small" style={{ marginBottom: 6 }}>
+            {webErr}
+          </div>
+        )}
         <div className="row-flex small" style={{ gap: 12, marginBottom: 6, flexWrap: 'wrap' }}>
           <span className="legend-chip analog-eq">≈ совпадает (≤5%)</span>
           <span className="legend-chip analog-near">близко (≤25%)</span>
@@ -1840,37 +2371,82 @@ export function ModelCard({ modelId }: { modelId: string }) {
           <span className="legend-chip">— нет данных</span>
         </div>
         <div style={{ overflowX: 'auto' }}>
-          <table className="models">
-            <thead>
-              <tr>
-                <th style={{ width: 200 }}>Характеристика</th>
-                <th style={{ width: 60 }}>Ед.</th>
-                <th style={{ width: 130 }} title="Код текущей модели — той, для которой ищем аналоги.">
-                  ТЕКУЩАЯ · {currentCode}
-                </th>
-                {ranked.map((r) => (
-                  <th key={r.m.id} style={{ width: 130 }}>
-                    {r.m.normalizedCode || r.m.rawCode}
+          {orientation === 'chars-rows' ? (
+            <table className="models">
+              <thead>
+                <tr>
+                  <th style={{ width: 200 }}>Характеристика</th>
+                  <th style={{ width: 60 }}>Ед.</th>
+                  <th
+                    style={{ width: 130 }}
+                    title="Код текущей модели — той, для которой ищем аналоги."
+                  >
+                    ТЕКУЩАЯ · {currentCode}
                   </th>
-                ))}
-              </tr>
-              <tr>
-                <th colSpan={3} className="muted small" style={{ textAlign: 'right' }}
-                  title="Отметьте, какие модели подходят как аналог. Сохраняется в локальном состоянии сессии."
-                >
-                  Подходит:
-                </th>
-                {ranked.map((r) => {
-                  const aname = r.m.normalizedCode || r.m.rawCode;
-                  return (
-                    <th key={`fit-${r.m.id}`} style={{ textAlign: 'center' }}>
-                      <label className="muted small" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                  {display.map((d) => (
+                    <th key={d.key} style={{ width: 140 }}>
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 4,
+                          justifyContent: 'space-between',
+                        }}
+                      >
+                        <span>
+                          {d.kind === 'web' && (
+                            <span
+                              className="src-chip src-web"
+                              style={{ marginRight: 4 }}
+                              title="Найдено в интернете через ИИ"
+                            >
+                              инт
+                            </span>
+                          )}
+                          {d.code}
+                        </span>
+                        {d.kind === 'web' && (d.reason || d.sourceUrl) && (
+                          <button
+                            className="link-btn"
+                            title="Источники по аналогу"
+                            onClick={() =>
+                              setSourcePopup({
+                                code: d.code,
+                                reason: d.reason,
+                                sourceUrl: d.sourceUrl,
+                              })
+                            }
+                          >
+                            📌
+                          </button>
+                        )}
+                      </div>
+                    </th>
+                  ))}
+                </tr>
+                <tr>
+                  <th
+                    colSpan={3}
+                    className="muted small"
+                    style={{ textAlign: 'right' }}
+                    title="Отметьте, какие модели подходят как аналог. Сохраняется в свойствах модели."
+                  >
+                    Подходит:
+                  </th>
+                  {display.map((d) => (
+                    <th key={`fit-${d.key}`} style={{ textAlign: 'center' }}>
+                      <label
+                        className="muted small"
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                      >
                         <input
                           type="checkbox"
-                          defaultChecked={!!(m.attributes ?? {})[`analog_fit:${aname}`]}
+                          defaultChecked={
+                            !!(m.attributes ?? {})[`analog_fit:${d.attrKey}`]
+                          }
                           onChange={(e) => {
                             const next = { ...(m.attributes ?? {}) };
-                            const k = `analog_fit:${aname}`;
+                            const k = `analog_fit:${d.attrKey}`;
                             if (e.target.checked) next[k] = '1';
                             else delete next[k];
                             update(m.id, { attributes: next });
@@ -1879,33 +2455,161 @@ export function ModelCard({ modelId }: { modelId: string }) {
                         ✓
                       </label>
                     </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {priorityKeys.map((k) => {
+                  const a = (m.characteristics ?? []).find((c) => c.key === k);
+                  const targetUnit = targetUnitFor(k);
+                  return (
+                    <tr key={k}>
+                      <td>{k}</td>
+                      <td className="muted small mono">{targetUnit ?? '—'}</td>
+                      <td className="mono">
+                        {a
+                          ? `${a.valueRaw}${a.unit ? ' ' + a.unit : ''}`
+                          : '—'}
+                      </td>
+                      {display.map((d) => {
+                        const b = d.getChar(k);
+                        const aNum = a?.valueNum;
+                        const bNum =
+                          b && 'valueNum' in b
+                            ? (b as Characteristic).valueNum
+                            : b && (b as { valueRaw: string }).valueRaw
+                              ? Number(
+                                  String((b as { valueRaw: string }).valueRaw).replace(
+                                    ',',
+                                    '.',
+                                  ),
+                                )
+                              : undefined;
+                        const diff =
+                          aNum != null && bNum != null && !Number.isNaN(bNum)
+                            ? Math.abs(aNum - bNum) / Math.max(Math.abs(aNum), 1)
+                            : null;
+                        const acls =
+                          diff == null
+                            ? ''
+                            : diff < 0.05
+                              ? 'analog-eq'
+                              : diff < 0.25
+                                ? 'analog-near'
+                                : 'analog-far';
+                        return (
+                          <td key={d.key} className={`mono ${acls}`}>
+                            {b
+                              ? `${b.valueRaw}${b.unit ? ' ' + b.unit : ''}`
+                              : '—'}
+                          </td>
+                        );
+                      })}
+                    </tr>
                   );
                 })}
-              </tr>
-            </thead>
-            <tbody>
-              {priorityKeys.map((k) => {
-                const a = (m.characteristics ?? []).find((c) => c.key === k);
-                const targetUnit = targetUnitFor(k);
-                return (
-                  <tr key={k}>
-                    <td>{k}</td>
-                    <td className="muted small mono">{targetUnit ?? '—'}</td>
-                    <td className="mono">
-                      {a
-                        ? `${a.valueRaw}${a.unit ? ' ' + a.unit : ''}`
-                        : '—'}
+              </tbody>
+            </table>
+          ) : (
+            // Транспонированная таблица: модели по строкам, характеристики по столбцам.
+            <table className="models">
+              <thead>
+                <tr>
+                  <th style={{ width: 180 }}>Модель</th>
+                  <th style={{ width: 80, textAlign: 'center' }}>Подходит</th>
+                  {priorityKeys.map((k) => {
+                    const u = targetUnitFor(k);
+                    return (
+                      <th key={k} style={{ minWidth: 110 }}>
+                        {k}
+                        {u ? ` (${u})` : ''}
+                      </th>
+                    );
+                  })}
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td title="Текущая модель — та, для которой ищем аналоги.">
+                    <strong>ТЕКУЩАЯ · {currentCode}</strong>
+                  </td>
+                  <td>—</td>
+                  {priorityKeys.map((k) => {
+                    const a = (m.characteristics ?? []).find((c) => c.key === k);
+                    return (
+                      <td key={k} className="mono">
+                        {a
+                          ? `${a.valueRaw}${a.unit ? ' ' + a.unit : ''}`
+                          : '—'}
+                      </td>
+                    );
+                  })}
+                </tr>
+                {display.map((d) => (
+                  <tr key={d.key}>
+                    <td>
+                      {d.kind === 'web' && (
+                        <span
+                          className="src-chip src-web"
+                          style={{ marginRight: 4 }}
+                          title="Найдено в интернете через ИИ"
+                        >
+                          инт
+                        </span>
+                      )}
+                      {d.code}
+                      {d.kind === 'web' && (d.reason || d.sourceUrl) && (
+                        <button
+                          className="link-btn"
+                          title="Источники по аналогу"
+                          style={{ marginLeft: 4 }}
+                          onClick={() =>
+                            setSourcePopup({
+                              code: d.code,
+                              reason: d.reason,
+                              sourceUrl: d.sourceUrl,
+                            })
+                          }
+                        >
+                          📌
+                        </button>
+                      )}
                     </td>
-                    {ranked.map((r) => {
-                      const b = (r.m.characteristics ?? []).find(
-                        (c) => c.key === k,
-                      );
+                    <td style={{ textAlign: 'center' }}>
+                      <input
+                        type="checkbox"
+                        defaultChecked={
+                          !!(m.attributes ?? {})[`analog_fit:${d.attrKey}`]
+                        }
+                        onChange={(e) => {
+                          const next = { ...(m.attributes ?? {}) };
+                          const k = `analog_fit:${d.attrKey}`;
+                          if (e.target.checked) next[k] = '1';
+                          else delete next[k];
+                          update(m.id, { attributes: next });
+                        }}
+                      />
+                    </td>
+                    {priorityKeys.map((k) => {
+                      const a = (m.characteristics ?? []).find((c) => c.key === k);
+                      const b = d.getChar(k);
+                      const aNum = a?.valueNum;
+                      const bNum =
+                        b && 'valueNum' in b
+                          ? (b as Characteristic).valueNum
+                          : b && (b as { valueRaw: string }).valueRaw
+                            ? Number(
+                                String((b as { valueRaw: string }).valueRaw).replace(
+                                  ',',
+                                  '.',
+                                ),
+                              )
+                            : undefined;
                       const diff =
-                        a?.valueNum != null && b?.valueNum != null
-                          ? Math.abs(a.valueNum - b.valueNum) /
-                            Math.max(Math.abs(a.valueNum), 1)
+                        aNum != null && bNum != null && !Number.isNaN(bNum)
+                          ? Math.abs(aNum - bNum) / Math.max(Math.abs(aNum), 1)
                           : null;
-                      const cls =
+                      const acls =
                         diff == null
                           ? ''
                           : diff < 0.05
@@ -1914,7 +2618,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
                               ? 'analog-near'
                               : 'analog-far';
                       return (
-                        <td key={r.m.id} className={`mono ${cls}`}>
+                        <td key={k} className={`mono ${acls}`}>
                           {b
                             ? `${b.valueRaw}${b.unit ? ' ' + b.unit : ''}`
                             : '—'}
@@ -1922,11 +2626,40 @@ export function ModelCard({ modelId }: { modelId: string }) {
                       );
                     })}
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
+        {sourcePopup && (
+          <ModalShell
+            title={`Источники по аналогу · ${sourcePopup.code}`}
+            onClose={() => setSourcePopup(null)}
+            width={520}
+          >
+            <div className="muted small" style={{ marginBottom: 6 }}>
+              Почему ИИ считает эту модель аналогом и откуда взяты данные.
+            </div>
+            <div style={{ marginBottom: 8 }}>
+              <strong>Обоснование:</strong>
+              <div style={{ marginTop: 4 }}>{sourcePopup.reason ?? '—'}</div>
+            </div>
+            <div>
+              <strong>Источник:</strong>{' '}
+              {sourcePopup.sourceUrl ? (
+                <a
+                  href={sourcePopup.sourceUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  {sourcePopup.sourceUrl}
+                </a>
+              ) : (
+                <span className="muted">не указан</span>
+              )}
+            </div>
+          </ModalShell>
+        )}
       </div>
     );
   }
@@ -3085,6 +3818,8 @@ export function ModelCard({ modelId }: { modelId: string }) {
       }>;
     } | null>(null);
     const [analogsOpen, setAnalogsOpen] = useState<'bom' | 'apl' | null>(null);
+    /** Поиск ТМЦ по ГОСТ (созвон 28.04.2026). */
+    const [gostOpen, setGostOpen] = useState(false);
     if (!m) return null;
     const rows = m.techCard ?? [];
     const acts = m.actions ?? [];
@@ -3364,6 +4099,12 @@ export function ModelCard({ modelId }: { modelId: string }) {
           >
             🔍 Поиск аналогов ТМЦ
           </button>
+          <button
+            onClick={() => setGostOpen(true)}
+            title="Поиск ТМЦ по справочнику ГОСТов и номенклатур (созвон 28.04.2026: «поиск по ГОСТ, номенклатурам»)."
+          >
+            🔍 По ГОСТ
+          </button>
         </div>
 
         <h4 style={{ margin: '8px 0 4px' }}>
@@ -3371,7 +4112,8 @@ export function ModelCard({ modelId }: { modelId: string }) {
         </h4>
         <div className="muted small" style={{ marginBottom: 4 }}>
           Подсказка: позиции без привязки к ВВ выделены — добавьте им вид
-          воздействия в техкарте, чтобы они попали в APL.
+          воздействия в техкарте, чтобы они попали в APL. Бейдж рядом
+          с названием — соответствующий ГОСТ из справочника.
         </div>
         <table className="models">
           <thead>
@@ -3385,28 +4127,38 @@ export function ModelCard({ modelId }: { modelId: string }) {
             </tr>
           </thead>
           <tbody>
-            {bom.map((x, i) => (
-              <tr
-                key={i}
-                className={x.hasUnboundVV ? 'spec-no-vv' : undefined}
-                title={
-                  x.hasUnboundVV
-                    ? 'В техкарте есть строки с этой ТМЦ без привязки к ВВ — APL для них не построится. Привяжите ВВ во вкладке «Техкарты».'
-                    : undefined
-                }
-              >
-                <td>{x.name}</td>
-                <td>{x.kind === 'material' ? 'материал' : 'запчасть'}</td>
-                <td>{x.unit ?? '—'}</td>
-                <td className="mono">{fmtQty(x.qty)}</td>
-                <td>
-                  {Array.from(x.sources).map((s) => (
-                    <SourceBadge key={s} source={s} />
-                  ))}
-                </td>
-                <td className="muted small">{x.refs}</td>
-              </tr>
-            ))}
+            {bom.map((x, i) => {
+              const gost = matchGostForTmc(x.name);
+              return (
+                <tr
+                  key={i}
+                  className={x.hasUnboundVV ? 'spec-no-vv' : undefined}
+                  title={
+                    x.hasUnboundVV
+                      ? 'В техкарте есть строки с этой ТМЦ без привязки к ВВ — APL для них не построится. Привяжите ВВ во вкладке «Техкарты».'
+                      : undefined
+                  }
+                >
+                  <td>
+                    {x.name}
+                    {gost && (
+                      <span className="gost-badge" title={gost.title}>
+                        {gost.gost}
+                      </span>
+                    )}
+                  </td>
+                  <td>{x.kind === 'material' ? 'материал' : 'запчасть'}</td>
+                  <td>{x.unit ?? '—'}</td>
+                  <td className="mono">{fmtQty(x.qty)}</td>
+                  <td>
+                    {Array.from(x.sources).map((s) => (
+                      <SourceBadge key={s} source={s} />
+                    ))}
+                  </td>
+                  <td className="muted small">{x.refs}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
 
@@ -3567,6 +4319,24 @@ export function ModelCard({ modelId }: { modelId: string }) {
               setAnalogsOpen(null);
             }}
             onClose={() => setAnalogsOpen(null)}
+          />
+        )}
+        {gostOpen && (
+          <GostSearchModal
+            onClose={() => setGostOpen(false)}
+            onAccept={(picked) => {
+              // Добавляем выбранные ГОСТ-позиции как новые ТМЦ-строки в техкарту.
+              // ВВ не привязан — пользователь выберет вручную потом.
+              for (const g of picked) {
+                upsertTcRow(modelId, {
+                  tmcName: g.title,
+                  tmcKind: 'material',
+                  source: 'classifier',
+                  note: g.gost,
+                });
+              }
+              setGostOpen(false);
+            }}
           />
         )}
       </div>
@@ -3771,6 +4541,336 @@ function ModalShell({
         {children}
       </div>
     </div>
+  );
+}
+
+/**
+ * Модалка поиска ТМЦ по справочнику ГОСТ (созвон 28.04.2026: «поиск
+ * по ГОСТ, номенклатурам»). Пользователь вводит часть названия / номера
+ * ГОСТа — мы показываем подходящие записи из справочника. Отмеченные
+ * позиции добавляются в техкарту как ТМЦ-строки с `source='classifier'`
+ * и `note=<номер ГОСТа>`.
+ */
+function GostSearchModal({
+  onClose,
+  onAccept,
+}: {
+  onClose: () => void;
+  onAccept: (picked: GostRef[]) => void;
+}) {
+  const [query, setQuery] = useState('');
+  const [picked, setPicked] = useState<Set<string>>(() => new Set());
+  const results = useMemo(() => {
+    if (!query.trim()) return [] as GostRef[];
+    return searchGosts(query, 30);
+  }, [query]);
+  const toggle = (g: string) => {
+    const next = new Set(picked);
+    if (next.has(g)) next.delete(g);
+    else next.add(g);
+    setPicked(next);
+  };
+  return (
+    <ModalShell title="🔍 Поиск ТМЦ по ГОСТ" onClose={onClose} width={680}>
+      <div className="muted small" style={{ marginBottom: 6 }}>
+        Введите часть названия (подшипник, фланец, прокладка) или номер ГОСТа
+        (520, 7798…). Отмеченные позиции добавятся в техкарту как ТМЦ
+        материала с пометкой ГОСТ.
+      </div>
+      <input
+        autoFocus
+        type="search"
+        placeholder="Например: подшипник, фланец, ГОСТ 520, ГОСТ 8338…"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        style={{ width: '100%', padding: '4px 6px', marginBottom: 8 }}
+      />
+      {query.trim() && results.length === 0 && (
+        <div className="muted small">Ничего не найдено по запросу.</div>
+      )}
+      {results.length > 0 && (
+        <table className="models">
+          <thead>
+            <tr>
+              <th style={{ width: 28 }}></th>
+              <th style={{ width: 160 }}>ГОСТ</th>
+              <th>Наименование</th>
+            </tr>
+          </thead>
+          <tbody>
+            {results.map((g) => (
+              <tr key={g.gost}>
+                <td>
+                  <input
+                    type="checkbox"
+                    checked={picked.has(g.gost)}
+                    onChange={() => toggle(g.gost)}
+                  />
+                </td>
+                <td className="mono">{g.gost}</td>
+                <td>{g.title}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <div
+        style={{
+          display: 'flex',
+          gap: 8,
+          justifyContent: 'flex-end',
+          marginTop: 10,
+        }}
+      >
+        <button onClick={onClose}>Отмена</button>
+        <button
+          className="primary"
+          disabled={picked.size === 0}
+          onClick={() =>
+            onAccept(results.filter((g) => picked.has(g.gost)))
+          }
+        >
+          Добавить ({picked.size})
+        </button>
+      </div>
+    </ModalShell>
+  );
+}
+
+/**
+ * Модалка каскадной сверки элементов и подэлементов (созвон 28.04.2026).
+ * Показывает рекомендации ИИ по составу с разбивкой по этапам:
+ * этап 1 = поиск по модели · 2 = по похожей · 3 = по классу · 4 = финальная.
+ * Пользователь отмечает галочками что применить — на «Применить» делаем
+ * batch-обновление техкарты.
+ */
+function VerifyCascadeModal({
+  result,
+  onClose,
+  onApply,
+}: {
+  result: {
+    add: Array<{
+      component: string;
+      subcomponent?: string;
+      stage: 'model' | 'similar' | 'class' | 'final';
+      reason?: string;
+      sourceUrl?: string;
+    }>;
+    rename: Array<{
+      from: string;
+      to: string;
+      stage: 'model' | 'similar' | 'class' | 'final';
+      reason?: string;
+    }>;
+    remove: Array<{
+      component: string;
+      subcomponent?: string;
+      reason?: string;
+    }>;
+    confidence?: number;
+    sourceUrl?: string;
+  };
+  onClose: () => void;
+  onApply: (sel: { add: Set<number>; rename: Set<number>; remove: Set<number> }) => void;
+}) {
+  const [addSel, setAddSel] = useState<Set<number>>(
+    () => new Set(result.add.map((_, i) => i)),
+  );
+  const [renameSel, setRenameSel] = useState<Set<number>>(
+    () => new Set(result.rename.map((_, i) => i)),
+  );
+  // Удаление по умолчанию выкл — «удалить» считаем самой агрессивной операцией.
+  const [removeSel, setRemoveSel] = useState<Set<number>>(() => new Set());
+  const toggle = (s: Set<number>, i: number, set: (n: Set<number>) => void) => {
+    const next = new Set(s);
+    if (next.has(i)) next.delete(i);
+    else next.add(i);
+    set(next);
+  };
+  const stageLabel: Record<'model' | 'similar' | 'class' | 'final', string> = {
+    model: 'модель',
+    similar: 'похожая',
+    class: 'класс',
+    final: 'финал',
+  };
+  const empty =
+    result.add.length === 0 &&
+    result.rename.length === 0 &&
+    result.remove.length === 0;
+  return (
+    <ModalShell title="🔎 Сверка элементов и подэлементов" onClose={onClose} width={840}>
+      <div className="muted small" style={{ margin: '4px 0 8px 0' }}>
+        Каскад: <strong>модель → похожая → класс/подкласс → финальная сверка</strong>.
+        Уверенность ИИ:{' '}
+        <strong>
+          {result.confidence != null
+            ? `${Math.round(result.confidence * 100)}%`
+            : '—'}
+        </strong>
+        {result.sourceUrl && (
+          <>
+            {' · '}
+            <a href={result.sourceUrl} target="_blank" rel="noreferrer">
+              источник
+            </a>
+          </>
+        )}
+      </div>
+      {empty && (
+        <div className="muted small" style={{ padding: 12 }}>
+          Состав в порядке — ИИ не нашёл что добавить, переименовать или
+          удалить. Если ожидаете другой результат — очистите кэш ИИ
+          в «Настройках» и повторите.
+        </div>
+      )}
+      {result.add.length > 0 && (
+        <details open style={{ marginTop: 6 }}>
+          <summary>
+            <strong>Добавить</strong> ({result.add.length})
+          </summary>
+          <table className="models" style={{ marginTop: 6 }}>
+            <thead>
+              <tr>
+                <th style={{ width: 28 }}></th>
+                <th style={{ width: 70 }}>этап</th>
+                <th>Элемент / Подэлемент</th>
+                <th>Почему</th>
+              </tr>
+            </thead>
+            <tbody>
+              {result.add.map((it, i) => (
+                <tr key={'a' + i}>
+                  <td>
+                    <input
+                      type="checkbox"
+                      checked={addSel.has(i)}
+                      onChange={() => toggle(addSel, i, setAddSel)}
+                    />
+                  </td>
+                  <td>
+                    <span className="src-chip">{stageLabel[it.stage]}</span>
+                  </td>
+                  <td>
+                    <strong>{it.component}</strong>
+                    {it.subcomponent ? ` / ${it.subcomponent}` : ''}
+                  </td>
+                  <td className="muted small">
+                    {it.reason ?? '—'}
+                    {it.sourceUrl && (
+                      <>
+                        {' · '}
+                        <a
+                          href={it.sourceUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          🔗
+                        </a>
+                      </>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </details>
+      )}
+      {result.rename.length > 0 && (
+        <details open style={{ marginTop: 6 }}>
+          <summary>
+            <strong>Переименовать</strong> ({result.rename.length})
+          </summary>
+          <table className="models" style={{ marginTop: 6 }}>
+            <thead>
+              <tr>
+                <th style={{ width: 28 }}></th>
+                <th style={{ width: 70 }}>этап</th>
+                <th>Было</th>
+                <th>Станет</th>
+                <th>Почему</th>
+              </tr>
+            </thead>
+            <tbody>
+              {result.rename.map((it, i) => (
+                <tr key={'r' + i}>
+                  <td>
+                    <input
+                      type="checkbox"
+                      checked={renameSel.has(i)}
+                      onChange={() => toggle(renameSel, i, setRenameSel)}
+                    />
+                  </td>
+                  <td>
+                    <span className="src-chip">{stageLabel[it.stage]}</span>
+                  </td>
+                  <td>{it.from}</td>
+                  <td>
+                    <strong>{it.to}</strong>
+                  </td>
+                  <td className="muted small">{it.reason ?? '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </details>
+      )}
+      {result.remove.length > 0 && (
+        <details style={{ marginTop: 6 }}>
+          <summary>
+            <strong>Убрать</strong> ({result.remove.length}) · по умолчанию выключено
+          </summary>
+          <table className="models" style={{ marginTop: 6 }}>
+            <thead>
+              <tr>
+                <th style={{ width: 28 }}></th>
+                <th>Элемент / Подэлемент</th>
+                <th>Почему</th>
+              </tr>
+            </thead>
+            <tbody>
+              {result.remove.map((it, i) => (
+                <tr key={'d' + i}>
+                  <td>
+                    <input
+                      type="checkbox"
+                      checked={removeSel.has(i)}
+                      onChange={() => toggle(removeSel, i, setRemoveSel)}
+                    />
+                  </td>
+                  <td>
+                    {it.component}
+                    {it.subcomponent ? ` / ${it.subcomponent}` : ''}
+                  </td>
+                  <td className="muted small">{it.reason ?? '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </details>
+      )}
+      <div
+        style={{
+          display: 'flex',
+          gap: 8,
+          justifyContent: 'flex-end',
+          marginTop: 10,
+        }}
+      >
+        <button onClick={onClose}>Отмена</button>
+        <button
+          className="primary"
+          disabled={
+            addSel.size === 0 && renameSel.size === 0 && removeSel.size === 0
+          }
+          onClick={() =>
+            onApply({ add: addSel, rename: renameSel, remove: removeSel })
+          }
+        >
+          Применить ({addSel.size + renameSel.size + removeSel.size})
+        </button>
+      </div>
+    </ModalShell>
   );
 }
 

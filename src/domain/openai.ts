@@ -892,6 +892,179 @@ ${opsList ? `Справочник операций (приоритет — вы�
     return [...dedup, ...additions].slice(0, 200);
   },
 
+  async verifyElementsAndSubelements(input) {
+    const code = input.model.normalizedCode || input.model.rawCode || '';
+    const cacheKey =
+      'verifyElems:' +
+      fingerprint(
+        code,
+        input.model.className,
+        input.model.subclassName,
+        input.current,
+        input.analogs,
+      );
+    const currentText = input.current
+      .map(
+        (c, i) => `${i + 1}. ${c.component}${c.subcomponent ? ' / ' + c.subcomponent : ''}`,
+      )
+      .join('\n');
+    const analogs = (input.analogs ?? []).map((a) => a.code).join(', ');
+    const system =
+      'Ты инженер ТОиР. Тебе дан текущий состав техкарты модели ' +
+      '(Элемент / Подэлемент). Проведи каскадную сверку: ' +
+      '(1) поиск по точному коду модели — что должно быть в составе по паспорту; ' +
+      '(2) поиск по похожим моделям того же подкласса; ' +
+      '(3) поиск по классу/подклассу (типовой состав); ' +
+      '(4) финальная сверка с введённым составом. ' +
+      'СТРОГИЕ ПРАВИЛА: ' +
+      'крепёж в составе НЕ указываем (болты, гайки, шайбы, винты, шпильки, ' +
+      'хомуты, штифты, шпонки, отверстия технические); существительные в ' +
+      'единственном числе и именительном падеже; первое слово — существительное; ' +
+      'не сокращать (эл/двиг → электродвигатель). ' +
+      'Возвращай JSON: ' +
+      '{"add":[{"component":"...","subcomponent":"...","stage":"model|similar|class|final","reason":"...","sourceUrl":"https://..."}], ' +
+      '"rename":[{"from":"...","to":"...","stage":"...","reason":"..."}], ' +
+      '"remove":[{"component":"...","subcomponent":"...","reason":"..."}], ' +
+      '"confidence":0.0-1.0, "sourceUrl":"https://..."}. ' +
+      'Если всё в порядке — возвращай пустые массивы.';
+    const user = `Модель: ${code}
+Класс: ${input.model.className ?? '—'}
+Подкласс: ${input.model.subclassName ?? '—'}
+Аналоги: ${analogs || '—'}
+Текущий состав:
+${currentText || '— (пусто)'}`;
+    type Out = {
+      add?: Array<{
+        component?: string;
+        subcomponent?: string;
+        stage?: string;
+        reason?: string;
+        sourceUrl?: string | null;
+      }>;
+      rename?: Array<{
+        from?: string;
+        to?: string;
+        stage?: string;
+        reason?: string;
+      }>;
+      remove?: Array<{
+        component?: string;
+        subcomponent?: string;
+        reason?: string;
+      }>;
+      confidence?: number;
+      sourceUrl?: string | null;
+    };
+    const result = await callOpenAI<Out>(cacheKey, {
+      system,
+      user,
+      maxTokens: 800,
+      model: 'quality',
+      isEmpty: (v) =>
+        !v ||
+        (((v as Out).add ?? []).length === 0 &&
+          ((v as Out).rename ?? []).length === 0 &&
+          ((v as Out).remove ?? []).length === 0),
+    });
+    const stages: ReadonlyArray<'model' | 'similar' | 'class' | 'final'> = [
+      'model',
+      'similar',
+      'class',
+      'final',
+    ];
+    const isStage = (s: unknown): s is 'model' | 'similar' | 'class' | 'final' =>
+      typeof s === 'string' && (stages as readonly string[]).includes(s);
+    return {
+      add: (result?.add ?? [])
+        .filter((x) => x.component && x.component.trim())
+        .map((x) => ({
+          component: String(x.component).trim(),
+          subcomponent: x.subcomponent?.trim() || undefined,
+          stage: isStage(x.stage) ? x.stage : 'final',
+          reason: x.reason,
+          sourceUrl: sanitizeUrl(x.sourceUrl ?? undefined),
+        })),
+      rename: (result?.rename ?? [])
+        .filter((x) => x.from && x.to)
+        .map((x) => ({
+          from: String(x.from).trim(),
+          to: String(x.to).trim(),
+          stage: isStage(x.stage) ? x.stage : 'final',
+          reason: x.reason,
+        })),
+      remove: (result?.remove ?? [])
+        .filter((x) => x.component && x.component.trim())
+        .map((x) => ({
+          component: String(x.component).trim(),
+          subcomponent: x.subcomponent?.trim() || undefined,
+          reason: x.reason,
+        })),
+      confidence: result?.confidence,
+      sourceUrl: sanitizeUrl(result?.sourceUrl ?? undefined),
+    };
+  },
+
+  async searchAnalogsFromWeb(input) {
+    const code = input.model.normalizedCode || input.model.rawCode || '';
+    const cacheKey =
+      'analogsWeb:' +
+      fingerprint(code, input.model.className, input.model.subclassName, input.keys);
+    const keysText = input.keys
+      .map((k) => `${k.key}${k.unit ? ' [' + k.unit + ']' : ''}`)
+      .join(', ');
+    const system =
+      'Ты помощник по подбору аналогов промышленного оборудования. ' +
+      'Найди 3-6 моделей-аналогов из открытых каталогов производителей, ' +
+      'у которых совпадает класс/подкласс и близкие приоритетные характеристики. ' +
+      'СТРОГИЕ ПРАВИЛА: ' +
+      '(1) только реальные модели реальных производителей (Wilo, Grundfos, ' +
+      'KSB, ABB, Siemens, Toshiba, и т.п.); ' +
+      '(2) для каждой модели верни массив characteristics в тех же ключах ' +
+      'что и keys; ' +
+      '(3) sourceUrl — только реальный https:// (каталог/datasheet); ' +
+      '(4) reason — 1 предложение, почему это аналог. ' +
+      'Возвращай JSON: {"items":[{"code":"...","manufacturer":"...","characteristics":[{"key":"...","valueRaw":"...","unit":"..."}],"reason":"...","sourceUrl":"https://..."}]}';
+    const user = `Целевая модель: ${code}
+Класс: ${input.model.className ?? '—'}
+Подкласс: ${input.model.subclassName ?? '—'}
+Приоритетные характеристики (ключи): ${keysText || '—'}`;
+    type Out = {
+      items?: Array<{
+        code?: string;
+        manufacturer?: string;
+        characteristics?: Array<{
+          key?: string;
+          valueRaw?: string | number;
+          unit?: string;
+        }>;
+        reason?: string;
+        sourceUrl?: string | null;
+      }>;
+    };
+    const result = await callOpenAI<Out>(cacheKey, {
+      system,
+      user,
+      maxTokens: 800,
+      model: 'quality',
+      isEmpty: (v) => !v || ((v as Out).items ?? []).length === 0,
+    });
+    return (result?.items ?? [])
+      .filter((x) => x.code && x.code.trim())
+      .map((x) => ({
+        code: String(x.code).trim(),
+        manufacturer: x.manufacturer?.trim() || undefined,
+        characteristics: (x.characteristics ?? [])
+          .filter((c) => c.key && c.valueRaw != null)
+          .map((c) => ({
+            key: String(c.key).trim(),
+            valueRaw: String(c.valueRaw).trim(),
+            unit: c.unit?.trim() || undefined,
+          })),
+        reason: x.reason,
+        sourceUrl: sanitizeUrl(x.sourceUrl ?? undefined),
+      }));
+  },
+
   async estimateReliabilityFromWeb(input) {
     const code = input.model.normalizedCode || input.model.rawCode || '';
     const cacheKey =
