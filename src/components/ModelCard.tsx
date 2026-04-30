@@ -59,8 +59,7 @@ function newId(p: string) {
 }
 
 /**
- * Бейдж расширения файла для документов на ТОР (п.6.1 ТЗ:
- * «Реализовано визуальное цветовое обозначение типов файлов»).
+ * Бейдж расширения файла для документов на ТОР.
  * Цвета подобраны под основные типы документов в ТОиР.
  */
 function fileExt(name: string): string {
@@ -192,15 +191,10 @@ export function ModelCard({ modelId }: { modelId: string }) {
         {tab === 'reliability' && <ReliabilityTab modelId={modelId} />}
       </div>
 
-      {tab === 'props' && norm && norm.applied.length > 0 && (
+      {tab === 'props' && norm && norm.warnings.length > 0 && (
         <details className="diag">
-          <summary>
-            Применённые правила нормализации ({norm.applied.length})
-          </summary>
+          <summary>Предупреждения ({norm.warnings.length})</summary>
           <ul>
-            {norm.applied.map((r, i) => (
-              <li key={i}>{r}</li>
-            ))}
             {norm.warnings.map((w, i) => (
               <li key={'w' + i} className="warn-text">
                 ⚠ {w}
@@ -247,7 +241,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
 
     /**
      * Нормализация всех операций и единиц измерения в техкарте по правилам
-     * п.8.4 (операции) и п.8.6 (ед.изм.). Соответствует п.6.5.11 ТЗ.
+     * п.8.4 (операции) и п.8.6 (ед.изм.).
      */
     const normalizeAllRows = () => {
       let touched = 0;
@@ -505,7 +499,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
             title={
               rows.length === 0
                 ? 'Сначала добавьте строки в техкарту.'
-                : 'Нормализовать все наименования операций, элементов и единицы измерения по правилам п.8.4–8.6 ТЗ.'
+                : 'Нормализовать все наименования операций, элементов и единицы измерения.'
             }
           >
             🪄 Нормализовать
@@ -569,7 +563,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
                   r.specialty &&
                   specs.find((s) => s.name === r.specialty)?.qualifications;
                 // Собираем доп.поля в title, чтобы их было видно по hover
-                // и они не съедали ширину таблицы (п.6.5 ТЗ).
+                // и они не съедали ширину таблицы.
                 const tipParts: string[] = [];
                 if (r.subcomponent) tipParts.push(`Подэлемент: ${r.subcomponent}`);
                 if (r.workDescription) tipParts.push(`Содержание: ${r.workDescription}`);
@@ -835,7 +829,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
         )}
         <div className="muted small" style={{ marginTop: 6 }}>
           Колонка «Тип ТМЦ» помечает только материалы и запчасти —
-          инструмент в спецификацию (BOM/APL) не попадает (см. п.6.6 ТЗ).
+          инструмент в спецификацию (BOM/APL) не попадает.
         </div>
       </div>
     );
@@ -1280,7 +1274,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
                 ? 'Подключите OpenAI ключ в «Настройках»'
                 : !m.className
                   ? 'Сначала определите класс модели'
-                  : 'Подобрать ВВ из общедоступных регламентов / руководств производителя (п.6.4 ТЗ)'
+                  : 'Подобрать ВВ из общедоступных регламентов / руководств производителя'
             }
           >
             Обогатить из интернета
@@ -1475,7 +1469,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
               }}
             />
             <button
-              title="Применить правила нормализации (п.8.3 ТЗ)"
+              title="Применить правила нормализации"
               onClick={() => {
                 const r = normalizeModelCode(
                   m.normalizedCode || m.rawCode,
@@ -2170,14 +2164,14 @@ export function ModelCard({ modelId }: { modelId: string }) {
                 ? 'Подключите OpenAI ключ в «Настройках»'
                 : !m.className
                   ? 'Сначала определите класс модели'
-                  : 'Обогатить характеристики типовыми значениями из общедоступных каталогов и руководств производителей (п.6.3 ТЗ)'
+                  : 'Обогатить характеристики типовыми значениями из общедоступных каталогов и руководств производителей'
             }
           >
             Обогатить из интернета
           </button>
           <button
             onClick={() => {
-              // Нормализация наименований и единиц по правилам п.8.5–8.6.
+              // Нормализация наименований и единиц.
               const next = (m.characteristics ?? []).map((c) => ({
                 ...c,
                 key: normalizeCharName(c.key),
@@ -2187,7 +2181,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
               setChars(next);
             }}
             disabled={(m.characteristics ?? []).length === 0}
-            title="Нормализовать наименования характеристик и единицы измерения по правилам п.8.5–8.6 ТЗ."
+            title="Нормализовать наименования характеристик и единицы измерения."
           >
             🪄 Нормализовать
           </button>
@@ -2264,7 +2258,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
                     <SourceBadge source={c.source} />
                     <button
                       className="link-btn"
-                      title="Окно с обоснованием (п.7.5 ТЗ): фрагмент документа, источник или правило, на основании которого заполнено поле."
+                      title="Окно с обоснованием: фрагмент документа, источник или правило, на основании которого заполнено поле."
                       style={{ marginLeft: 4 }}
                       onClick={() =>
                         setExcerpt({
@@ -2419,7 +2413,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
       a.name.localeCompare(b.name, 'ru'),
     );
 
-    // APL (Application Parts List, п.6.6 / п.4 ТЗ) = «список компонентов для ВВ
+    // APL (Application Parts List, п.6.6 / п.4) = «список компонентов для ВВ
     // ТОиР, БЕЗ расходных материалов» — поэтому группируем по ВВ и фильтруем
     // tmcKind === 'spare'. Расходники (масла, прокладки, фильтры) идут в BOM.
     const aplGroups = new Map<
@@ -2461,7 +2455,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
       0,
     );
 
-    // AOPL (Aggregate-Operation Parts List, п.6.6 ТЗ) = запчасти/материалы
+    // AOPL (Aggregate-Operation Parts List, п.6.6) = запчасти/материалы
     // в разрезе компонент агрегата (Элемент → Подэлемент). Помогает понять,
     // какие ТМЦ нужны для каждой части агрегата вне зависимости от ВВ.
     const aoplGroups = new Map<
@@ -2571,7 +2565,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
           <span className="muted small">
             {isEmpty
               ? 'Техкарт нет. Дополните спецификацию из интернета или из аналогов — позиции добавятся в техкарты автоматически.'
-              : `BOM: ${bom.length} · APL: ${aplCount} в ${aplGroups.size} ВВ · AOPL: ${aoplCount} в ${aoplGroups.size} компонент(ах) · из ${rows.length} строк техкарт. Инструмент в спецификацию не попадает (п.6.6 ТЗ).`}
+              : `BOM: ${bom.length} · APL: ${aplCount} в ${aplGroups.size} ВВ · AOPL: ${aoplCount} в ${aoplGroups.size} компонент(ах) · из ${rows.length} строк техкарт. Инструмент в спецификацию не попадает.`}
           </span>
           <span className="spacer" />
           <button onClick={exportXlsx} disabled={!bom.length}>
@@ -2586,7 +2580,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
                 ? 'Укажите OpenAI ключ в «Настройках»'
                 : acts.length === 0
                   ? 'Сначала добавьте ВВ во вкладке «ВВ»'
-                  : 'Дополнить BOM типовыми позициями из открытых источников (п.6.6 ТЗ)'
+                  : 'Дополнить BOM типовыми позициями из открытых источников'
             }
             onClick={() => enrichFromWeb('bom')}
           >
@@ -2599,7 +2593,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
                 ? 'Укажите OpenAI ключ в «Настройках»'
                 : acts.length === 0
                   ? 'Сначала добавьте ВВ во вкладке «ВВ»'
-                  : 'Дополнить APL типовыми запчастями из открытых источников (п.6.6 ТЗ)'
+                  : 'Дополнить APL типовыми запчастями из открытых источников'
             }
             onClick={() => enrichFromWeb('apl')}
           >
@@ -3296,7 +3290,7 @@ function BomAnalogsModal({
 }
 
 /** Окно с фрагментом документа, на основании которого получено значение
- * (п.7 ТЗ — «Окно с выводом части документа на основании которого
+ * («Окно с выводом части документа на основании которого
  * сгенерированы данные с применением сигнальных символов»). */
 function DocExcerptModal({
   doc,
@@ -3314,7 +3308,7 @@ function DocExcerptModal({
   onClose: () => void;
 }) {
   // Если документ не привязан напрямую — попробуем найти первый
-  // документ, в котором встречается ключ/значение (п.7.5 ТЗ — окно
+  // документ, в котором встречается ключ/значение (п.7.5 — окно
   // с цитатой документа должно работать, даже если документ привязан
   // через индекс, а не явный link).
   const keyLc = charKey.toLowerCase();
@@ -3372,7 +3366,7 @@ function DocExcerptModal({
       >
         <div className="row-flex" style={{ alignItems: 'center', gap: 6 }}>
           <h3 style={{ margin: 0 }}>
-            Обоснование значения · п.7.5 ТЗ
+            Обоснование значения
           </h3>
           <span className="spacer" />
           <button onClick={onClose}>×</button>
@@ -3480,7 +3474,7 @@ function DocExcerptModal({
   );
 }
 
-/** Бейдж источника информации (п.7 ТЗ — оценка качества данных). */
+/** Бейдж источника информации (оценка качества данных). */
 function SourceBadge({
   source,
   confidence,

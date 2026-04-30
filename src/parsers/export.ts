@@ -180,7 +180,7 @@ function classificationSheet(models: EquipmentModel[]): XLSX.WorkSheet {
 }
 
 function techCardsSheet(models: EquipmentModel[]): XLSX.WorkSheet {
-  // Формат повторяет «Шаблон ТехКарты.xlsx» Простоев.Нет (п.6.5 ТЗ).
+  // Формат повторяет «Шаблон ТехКарты.xlsx» Простоев.Нет.
   const aoa: (string | number | null)[][] = [
     [
       'Класс',

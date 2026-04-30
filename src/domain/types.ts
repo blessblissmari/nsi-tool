@@ -25,7 +25,7 @@ export interface EquipmentModel {
   nodeId: string;
   /** Сырое значение, как пришло от заказчика. */
   rawCode: string;
-  /** Результат нормализации по правилам п.8.3 ТЗ. */
+  /** Результат нормализации. */
   normalizedCode?: string;
   /** Класс по классификатору. */
   className?: string;
@@ -222,9 +222,9 @@ export interface NormalizationRule {
 }
 
 export interface NormalizationRules {
-  /** п.8.3 ТЗ — наименования моделей. */
+  /** п.8.3 — наименования моделей. */
   modelRules: NormalizationRule[];
-  /** п.8.2 ТЗ — наименования классов и подклассов. */
+  /** п.8.2 — наименования классов и подклассов. */
   classRules: NormalizationRule[];
 }
 

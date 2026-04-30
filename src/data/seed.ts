@@ -29,7 +29,7 @@ interface SeedFullCharsRow {
 }
 const SEED_FULL_CHARS = seedModelsFullCharsJson as SeedFullCharsRow[];
 
-/** Справочники «Простоев.Нет» по умолчанию (п.6.4–6.5 ТЗ). */
+/** Справочники «Простоев.Нет» по умолчанию. */
 export const SEED_REFERENCES: ReferenceData = PROSTOEV_REFERENCES;
 
 function mapVvKind(name: string): ActionItem['kind'] {
@@ -245,7 +245,7 @@ export const SEED_NORMALIZATION_RULES: NormalizationRules = {
 /**
  * Seed — демо-иерархия «Северал» из бандлированного «Иерархия с моделями.xlsx»
  * (предприятие → ВС → цех → участок → линия → агрегат → ТОР; 7 уровней, 29 моделей).
- * Модели сразу нормализованы по п.8.3 ТЗ и прокласифицированы по привязкам
+ * Модели сразу нормализованы по п.8.3 и прокласифицированы по привязкам
  * из «Классификация моделей.xlsx».
  *
  * Если пользователь загрузит свой xlsx через «Загрузить», `setHierarchy`

@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useStore } from '../store';
 
 /**
- * Окно массовой обработки моделей (п.6.3 ТЗ).
+ * Окно массовой обработки моделей.
  *
  * Показывает все модели в виде таблицы с фильтрами по статусам:
  *   — без класса
@@ -123,7 +123,7 @@ export function BulkProcessing({ onClose }: Props) {
         }}
       >
         <div className="row-flex" style={{ alignItems: 'center', gap: 8 }}>
-          <h3 style={{ margin: 0 }}>Массовая обработка моделей · п.6.3 ТЗ</h3>
+          <h3 style={{ margin: 0 }}>Массовая обработка моделей</h3>
           <span className="spacer" />
           <button onClick={onClose}>закрыть</button>
         </div>
@@ -167,7 +167,7 @@ export function BulkProcessing({ onClose }: Props) {
         <div className="row-flex" style={{ gap: 6, flexWrap: 'wrap' }}>
           <button
             disabled={filtered.length === 0}
-            title="Применить правила нормализации (п.8.3) ко всем выбранным моделям."
+            title="Применить правила нормализации ко всем выбранным моделям."
             onClick={() => {
               const ids = new Set(filtered.map((m) => m.id));
               const r = normalizeAll(ids);

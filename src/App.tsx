@@ -116,11 +116,11 @@ function Inner({
               {stats.total > 0 && (
                 <>
                   {' · '}
-                  <span title="п.7 ТЗ — средняя полнота приоритетных характеристик">
+                  <span title="средняя полнота приоритетных характеристик">
                     хар-к {Math.round(stats.completeness * 100)}%
                   </span>
                   {' · '}
-                  <span title="п.7 ТЗ — доля моделей, проверенных экспертом">
+                  <span title="доля моделей, проверенных экспертом">
                     проверено {stats.expertOk}/{stats.total}
                   </span>
                 </>
