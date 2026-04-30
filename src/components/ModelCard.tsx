@@ -874,7 +874,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
                 const elemWarn = r.component ? normElement(r.component).warnings.length > 0 : false;
                 const subWarn = r.subcomponent ? normElement(r.subcomponent).warnings.length > 0 : false;
                 return (
-                  <tr key={r.id} title={rowTitle || undefined} className={`src-${r.source}`}>
+                  <tr key={r.id} title={rowTitle || undefined} className={`tc-row src-${r.source}`}>
                     <td>
                       {r.isAggregate ? (
                         <span className="muted small" title="Операция на сам агрегат">⟨агрегат⟩</span>

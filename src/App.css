@@ -765,6 +765,18 @@ table.models tr.src-ai       > td { background: #e7f9ee; }
 table.models tr.src-manual   > td { background: #ffffff; }
 table.models tr.src-classifier > td { background: #fff0e6; }
 
+/* Подсветка пустых ячеек в техкарте: пользователь сразу видит, что ИИ или
+ * эксперт не заполнил поле. Делаем тонкий жёлтый фон у инпутов с пустым
+ * value (placeholder-shown работает для всех input/select без значения). */
+table.models tr.tc-row td input:placeholder-shown,
+table.models tr.tc-row td input[value=""],
+table.models tr.tc-row td select:has(option[value=""]:checked),
+table.models tr.tc-row td select.tc-empty {
+  background: #fffbe5;
+  outline: 1px dashed #d97706;
+  outline-offset: -1px;
+}
+
 /* Чип «Источник» внутри строки. */
 .src-chip {
   font-size: 11px;
