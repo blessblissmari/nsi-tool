@@ -803,3 +803,73 @@ table.models tr.spec-no-vv > td {
   background: #fff4e0;
   border-left: 3px solid #d97706;
 }
+
+/* Шапка-напоминание в карточке модели (созвон 28.04.2026: «добавить
+ * напоминания для пользователя»). Появляется под вкладками карточки,
+ * собирает «не заполнено: X хар. · нет ВВ · Y пустых ячеек ТК · Z BOM
+ * без ВВ» и позволяет одним кликом перейти на нужную вкладку. */
+.reminder-ribbon {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  padding: 6px 10px;
+  margin: 4px 0 6px 0;
+  background: #fff8e1;
+  border: 1px solid #f0c14b;
+  border-radius: 4px;
+  font-size: 12px;
+}
+.reminder-ribbon.severe {
+  background: #fde7e0;
+  border-color: #d9534f;
+}
+.reminder-ribbon .reminder-icon {
+  font-size: 14px;
+}
+.reminder-chip {
+  background: #fff;
+  border: 1px solid #d8b25a;
+  border-radius: 12px;
+  padding: 1px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.reminder-chip:hover {
+  background: #fff2cc;
+}
+.reminder-chip.severe {
+  background: #fbe1d8;
+  border-color: #d9534f;
+  color: #842029;
+  font-weight: 600;
+}
+.reminder-chip.severe:hover {
+  background: #f7d0c2;
+}
+
+/* Источник-чип на ячейке ТК (созвон 28.04.2026: «раскраска тех карты
+ * по столбцам ИИ vs человек»). Маленький уголок в углу ячейки,
+ * который показывает, кто заполнил это конкретное поле. */
+table.models tr.tc-row td.cell-src-ai { background: #e7f9ee; }
+table.models tr.tc-row td.cell-src-web { background: #f5e7fa; }
+table.models tr.tc-row td.cell-src-document { background: #eef5ff; }
+table.models tr.tc-row td.cell-src-analog { background: #fff8d6; }
+table.models tr.tc-row td.cell-src-classifier { background: #fff0e6; }
+table.models tr.tc-row td.cell-src-database { background: #e3f0ff; }
+table.models tr.tc-row td.cell-src-manual { background: #ffffff; }
+
+/* Метка ГОСТ рядом с ТМЦ в спецификации — синий бейдж с номером ГОСТ. */
+.gost-badge {
+  display: inline-block;
+  font-size: 10px;
+  line-height: 14px;
+  padding: 0 5px;
+  margin-left: 6px;
+  border-radius: 2px;
+  background: #e0ecff;
+  border: 1px solid #6a91c8;
+  color: #1a3d6e;
+  font-family: 'JetBrains Mono', monospace;
+  cursor: help;
+}

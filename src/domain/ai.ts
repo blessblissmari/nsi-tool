@@ -163,6 +163,67 @@ export interface AiProvider {
     }>
   >;
 
+  /**
+   * Каскад «🔎 Сверить элементы» (созвон 28.04.2026): проверка состава
+   * (Элемент / Подэлемент) против эталонных данных. Этапы:
+   *   1. поиск по точному коду модели (если знает производителя);
+   *   2. поиск по похожей модели (тот же подкласс / другой код);
+   *   3. поиск по классу / подклассу (типовой состав);
+   *   4. финальная сверка с тем, что уже введено в техкарте.
+   *
+   * На вход идёт текущий состав; на выход — рекомендации:
+   *  - что добавить (новые элементы);
+   *  - что переименовать (нормализация);
+   *  - что убрать (явный мусор / крепёж).
+   */
+  verifyElementsAndSubelements?(input: {
+    model: Pick<EquipmentModel, 'className' | 'subclassName' | 'normalizedCode' | 'rawCode'>;
+    /** Текущий состав техкарты (чтобы ИИ сверил, а не выдумал заново). */
+    current: Array<{ component: string; subcomponent?: string }>;
+    /** Аналоги — название модели, чтобы ИИ опирался на конкретные изделия. */
+    analogs?: Array<{ code: string }>;
+  }): Promise<{
+    add: Array<{
+      component: string;
+      subcomponent?: string;
+      stage: 'model' | 'similar' | 'class' | 'final';
+      reason?: string;
+      sourceUrl?: string;
+    }>;
+    rename: Array<{
+      from: string;
+      to: string;
+      stage: 'model' | 'similar' | 'class' | 'final';
+      reason?: string;
+    }>;
+    remove: Array<{
+      component: string;
+      subcomponent?: string;
+      reason?: string;
+    }>;
+    confidence?: number;
+    sourceUrl?: string;
+  }>;
+
+  /**
+   * Поиск аналогов модели через интернет (созвон 28.04.2026: «поиск аналогов
+   * по интернету в окне аналоги»). Возвращает 3-8 моделей-аналогов с
+   * приоритетными характеристиками для сравнения и ссылкой на источник
+   * (каталог / маркетплейс / справочник производителя).
+   */
+  searchAnalogsFromWeb?(input: {
+    model: Pick<EquipmentModel, 'className' | 'subclassName' | 'normalizedCode' | 'rawCode'>;
+    keys: Array<{ key: string; unit?: string }>;
+  }): Promise<
+    Array<{
+      code: string;
+      manufacturer?: string;
+      characteristics: Array<{ key: string; valueRaw: string; unit?: string }>;
+      reason?: string;
+      sourceUrl?: string;
+    }>
+  >;
+
   fillTechCardByTemplate(input: {
     model: Pick<EquipmentModel, 'className' | 'subclassName' | 'normalizedCode' | 'rawCode'>;
     actions: Array<{ id: string; name: string; periodHours?: number }>;
