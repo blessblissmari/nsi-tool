@@ -891,4 +891,63 @@ ${opsList ? `Справочник операций (приоритет — вы�
     }
     return [...dedup, ...additions].slice(0, 200);
   },
+
+  async estimateReliabilityFromWeb(input) {
+    const code = input.model.normalizedCode || input.model.rawCode || '';
+    const cacheKey =
+      'reliability:' +
+      fingerprint(code, input.model.className, input.model.subclassName);
+    const system =
+      'Ты эксперт по надёжности промышленного оборудования (RAM-анализ, ' +
+      'ISO/IEC 60300, MIL-HDBK-217). По модели/классу/подклассу дай ' +
+      'оценку типовой надёжности на основании каталогов производителей и ' +
+      'отраслевой статистики. ' +
+      'СТРОГИЕ ПРАВИЛА: ' +
+      '(1) mtbfHours — среднее время между отказами в часах (целое). ' +
+      '(2) mttrHours — среднее время восстановления в часах (число). ' +
+      '(3) lambdaPerHour = 1/MTBF (число). ' +
+      '(4) availability = MTBF/(MTBF+MTTR) — округлённая до 4 знаков. ' +
+      '(5) confidence: 0..1; не выше 0.6 если оперируешь только данными ' +
+      'класса/подкласса (без конкретной модели). ' +
+      '(6) reason — 1-2 предложения: на основании каких аналогов/стандартов. ' +
+      '(7) sourceUrl — только реальный https:// если уверен; иначе null. ' +
+      '(8) analogCount — целое: сколько моделей-аналогов учтено в оценке. ' +
+      'Возвращай JSON: {"mtbfHours":..., "mttrHours":..., "lambdaPerHour":..., ' +
+      '"availability":..., "confidence":..., "reason":"...", ' +
+      '"sourceUrl":"https://...", "analogCount":...}';
+    const user = `Модель: ${code}
+Класс: ${input.model.className ?? '—'}
+Подкласс: ${input.model.subclassName ?? '—'}`;
+    type Out = {
+      mtbfHours?: number;
+      mttrHours?: number;
+      lambdaPerHour?: number;
+      availability?: number;
+      confidence?: number;
+      reason?: string;
+      sourceUrl?: string | null;
+      analogCount?: number;
+    };
+    const result = await callOpenAI<Out>(cacheKey, {
+      system,
+      user,
+      maxTokens: 400,
+      isEmpty: (v) =>
+        !v ||
+        ((v as Out).mtbfHours === undefined && (v as Out).mttrHours === undefined),
+    });
+    if (!result) return { reason: 'нет данных' };
+    return {
+      mtbfHours: typeof result.mtbfHours === 'number' ? result.mtbfHours : undefined,
+      mttrHours: typeof result.mttrHours === 'number' ? result.mttrHours : undefined,
+      lambdaPerHour:
+        typeof result.lambdaPerHour === 'number' ? result.lambdaPerHour : undefined,
+      availability:
+        typeof result.availability === 'number' ? result.availability : undefined,
+      confidence: typeof result.confidence === 'number' ? result.confidence : undefined,
+      reason: result.reason,
+      sourceUrl: sanitizeUrl(result.sourceUrl ?? undefined),
+      analogCount: typeof result.analogCount === 'number' ? result.analogCount : undefined,
+    };
+  },
 };

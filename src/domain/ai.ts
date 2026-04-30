@@ -101,6 +101,26 @@ export interface AiProvider {
    * исполнителей, Профессия/Квалификация, Трудоёмкость, ТМЦ/кол./ед.
    */
   /**
+   * Оценка надёжности по аналогам из открытых источников (созвон 28.04.2026).
+   * Если статистики отказов нет — ИИ возвращает типовые MTBF, MTTR, λ
+   * для класса/подкласса по данным каталогов и стандартов (ISO/IEC 60300,
+   * данные производителей). Для прозрачности отдельно возвращает
+   * кол-во моделей-аналогов, на которых основана оценка.
+   */
+  estimateReliabilityFromWeb?(input: {
+    model: Pick<EquipmentModel, 'className' | 'subclassName' | 'normalizedCode' | 'rawCode'>;
+  }): Promise<{
+    mtbfHours?: number;
+    mttrHours?: number;
+    lambdaPerHour?: number;
+    availability?: number;
+    confidence?: number;
+    reason?: string;
+    sourceUrl?: string;
+    analogCount?: number;
+  }>;
+
+  /**
    * Этап 3 ручного workflow (промпт нач-ка): «Состав». Извлекает из текста
    * документа и/или общих знаний типовой состав элементов и подэлементов.
    * Каждый элемент/подэлемент — отдельной строкой (по правилам нач-ка:

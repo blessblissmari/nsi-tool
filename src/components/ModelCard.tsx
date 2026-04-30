@@ -1177,7 +1177,9 @@ export function ModelCard({ modelId }: { modelId: string }) {
     const m = useStore((s) => s.models.find((x) => x.id === modelId));
     const allModels = useStore((s) => s.models);
     const setFailures = useStore((s) => s.setFailures);
+    const update = useStore((s) => s.updateModel);
     const [horizonH, setHorizonH] = useState<number>(8760); // 1 год по умолчанию
+    const [webBusy, setWebBusy] = useState(false);
     if (!m) return null;
     const failures = m.failures ?? [];
 
@@ -1336,6 +1338,54 @@ export function ModelCard({ modelId }: { modelId: string }) {
             загрузить историю отказов…
           </label>
           <button onClick={addRow}>+ отказ</button>
+          <button
+            disabled={webBusy || !getApiKey() || !m.className}
+            title={
+              !getApiKey()
+                ? 'Нужен ключ OpenAI в Настройках'
+                : !m.className
+                  ? 'Сначала определите класс модели'
+                  : 'Оценить MTBF/MTTR/Kг по аналогам из открытых источников. Сохраняется в свойствах модели как «оценка по аналогам».'
+            }
+            onClick={async () => {
+              if (!aiProvider().estimateReliabilityFromWeb) {
+                alert('Провайдер ИИ не поддерживает оценку надёжности.');
+                return;
+              }
+              setWebBusy(true);
+              try {
+                const r = await aiProvider().estimateReliabilityFromWeb!({
+                  model: {
+                    className: m.className,
+                    subclassName: m.subclassName,
+                    normalizedCode: m.normalizedCode,
+                    rawCode: m.rawCode,
+                  },
+                });
+                const next = { ...(m.attributes ?? {}) };
+                if (r.mtbfHours != null) next['rel_web_mtbf'] = String(r.mtbfHours);
+                if (r.mttrHours != null) next['rel_web_mttr'] = String(r.mttrHours);
+                if (r.availability != null) next['rel_web_kg'] = String(r.availability);
+                if (r.lambdaPerHour != null) next['rel_web_lambda'] = String(r.lambdaPerHour);
+                if (r.confidence != null) next['rel_web_conf'] = String(r.confidence);
+                if (r.reason) next['rel_web_reason'] = r.reason;
+                if (r.sourceUrl) next['rel_web_url'] = r.sourceUrl;
+                if (r.analogCount != null) next['rel_web_n'] = String(r.analogCount);
+                update(m.id, { attributes: next });
+                alert(
+                  'Оценка получена:\n' +
+                    `MTBF ≈ ${r.mtbfHours ?? '—'} ч · MTTR ≈ ${r.mttrHours ?? '—'} ч · Kг ≈ ${r.availability ?? '—'}\n` +
+                    `Аналогов: ${r.analogCount ?? '—'}, conf ${r.confidence ?? '—'}\n${r.reason ?? ''}`,
+                );
+              } catch (e) {
+                alert('Ошибка ИИ: ' + (e as Error).message);
+              } finally {
+                setWebBusy(false);
+              }
+            }}
+          >
+            {webBusy ? '…ИИ' : '🌐 Оценить по аналогам (интернет)'}
+          </button>
           {failures.length > 0 && (
             <button
               onClick={() => {
@@ -1615,6 +1665,65 @@ export function ModelCard({ modelId }: { modelId: string }) {
                 R({fmtHoursCompact(horizonH)}) по аналогам ≈{' '}
                 <b>{(analogAgg.rT * 100).toFixed(2)}%</b>
                 {failures.length === 0 && ' — используйте как ориентир, пока нет собственной статистики.'}
+              </div>
+            )}
+          </div>
+        )}
+
+        {(m.attributes?.['rel_web_mtbf'] || m.attributes?.['rel_web_mttr']) && (
+          <div style={{ marginTop: 12 }}>
+            <h4>Оценка по аналогам из интернета</h4>
+            <table className="models">
+              <thead>
+                <tr>
+                  <th>MTBF, ч</th>
+                  <th>MTTR, ч</th>
+                  <th>Кг</th>
+                  <th>λ, 1/ч</th>
+                  <th>Аналогов</th>
+                  <th>Уверенность</th>
+                  <th>Источник</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td className="mono">{m.attributes['rel_web_mtbf'] ?? '—'}</td>
+                  <td className="mono">{m.attributes['rel_web_mttr'] ?? '—'}</td>
+                  <td className="mono">
+                    {m.attributes['rel_web_kg']
+                      ? Number(m.attributes['rel_web_kg']).toFixed(4)
+                      : '—'}
+                  </td>
+                  <td className="mono">
+                    {m.attributes['rel_web_lambda']
+                      ? Number(m.attributes['rel_web_lambda']).toExponential(2)
+                      : '—'}
+                  </td>
+                  <td className="mono">{m.attributes['rel_web_n'] ?? '—'}</td>
+                  <td className="mono">
+                    {m.attributes['rel_web_conf']
+                      ? `${(Number(m.attributes['rel_web_conf']) * 100).toFixed(0)}%`
+                      : '—'}
+                  </td>
+                  <td className="muted small">
+                    {m.attributes['rel_web_url'] ? (
+                      <a
+                        href={m.attributes['rel_web_url']}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        🔗 ссылка
+                      </a>
+                    ) : (
+                      '—'
+                    )}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            {m.attributes['rel_web_reason'] && (
+              <div className="muted small" style={{ marginTop: 4 }}>
+                {m.attributes['rel_web_reason']}
               </div>
             )}
           </div>
