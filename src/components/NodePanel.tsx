@@ -82,10 +82,16 @@ export function NodePanel() {
         <div className="spacer" />
         {!editing ? (
           <>
-            <button onClick={startEdit}>Редактировать</button>
+            <button
+              onClick={startEdit}
+              title="Изменить имя и параметры узла."
+            >
+              Редактировать
+            </button>
             {CHILD_TYPES[node.type].map((t) => (
               <button
                 key={t}
+                title={`Добавить вложенный узел типа «${TYPE_LABEL[t]}».`}
                 onClick={() => {
                   const name = prompt(`Имя нового узла «${TYPE_LABEL[t]}»`);
                   if (name) addChildNode(node.id, t, name);
@@ -97,6 +103,7 @@ export function NodePanel() {
             {node.type !== 'enterprise' && (
               <button
                 className="danger"
+                title="Удалить узел и всё вложенное в него (с подтверждением)."
                 onClick={() => {
                   if (confirm(`Удалить «${node.name}» и всё внутри?`))
                     deleteNode(node.id);
@@ -108,8 +115,8 @@ export function NodePanel() {
           </>
         ) : (
           <>
-            <button onClick={save}>Сохранить</button>
-            <button onClick={() => setEditing(false)}>Отмена</button>
+            <button onClick={save} title="Сохранить изменения.">Сохранить</button>
+            <button onClick={() => setEditing(false)} title="Отменить редактирование.">Отмена</button>
           </>
         )}
       </div>
@@ -182,6 +189,7 @@ export function NodePanel() {
                     </td>
                     <td>
                       <button
+                        title="Удалить этот атрибут."
                         onClick={() => {
                           const a = draft.attrs.filter((_, j) => j !== i);
                           setDraft({ ...draft, attrs: a });
@@ -195,6 +203,7 @@ export function NodePanel() {
                 <tr>
                   <td colSpan={3}>
                     <button
+                      title="Добавить пустую пару «Ключ — Значение» в атрибуты узла."
                       onClick={() =>
                         setDraft({
                           ...draft,

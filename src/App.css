@@ -775,3 +775,91 @@ table.models input.warn {
   background: #fff0e6;
   border-color: #d97706;
 }
+
+/* ─── UX-улучшения (сообщения заказчика 14.05) ─────────────────────────── */
+
+/* Контейнер прокрутки техкарты: горизонтальная полоса всегда видна,
+   независимо от высоты страницы (заказчик: «надо полосу прокрутки закрепить»). */
+.tc-scroll {
+  max-height: 70vh;
+  overflow: auto;
+  border: 1px solid var(--bg-dim);
+  border-radius: 4px;
+  background: var(--bg);
+}
+.tc-scroll table.tc-table {
+  margin: 0;
+}
+.tc-scroll table.tc-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg-alt);
+}
+
+/* Разделитель между группами кнопок (базовые ↔ нумерованные шаги). */
+.step-sep {
+  display: inline-block;
+  margin: 0 2px;
+  color: var(--fg-dim);
+  font-weight: 500;
+  user-select: none;
+}
+
+/* Нумерованные кнопки ручного workflow (1. Состав / 2. Операции / 3. Поиск). */
+.step-btn {
+  font-weight: 600;
+}
+
+/* Баннер статуса: подсказка по результату работы кнопок + следующий шаг. */
+.status-banner {
+  padding: 6px 10px;
+  margin: 6px 0;
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 1.45;
+  border: 1px solid transparent;
+}
+.status-banner.status-info {
+  background: var(--accent-bg);
+  color: var(--accent);
+  border-color: var(--accent-glow);
+}
+.status-banner.status-ok {
+  background: var(--ok-bg);
+  color: var(--ok);
+}
+.status-banner.status-warn {
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+.status-banner.status-error {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+.status-banner .status-next {
+  font-weight: 600;
+}
+
+/* Шрифт значений из ИИ/документов/интернета/аналога/классификатора — приглушённый,
+   чтобы «программные» поля не бросались в глаза по сравнению с пользовательским
+   вводом (заказчик 14.05: «шрифт у Андрея, шрифт программных полей не так бросается»). */
+table.models tr.src-ai input,
+table.models tr.src-ai select,
+table.models tr.src-web input,
+table.models tr.src-web select,
+table.models tr.src-document input,
+table.models tr.src-document select,
+table.models tr.src-analog input,
+table.models tr.src-analog select,
+table.models tr.src-classifier input,
+table.models tr.src-classifier select {
+  color: var(--fg-dim);
+  font-weight: 400;
+  font-style: italic;
+}
+table.models tr.src-manual input,
+table.models tr.src-manual select {
+  font-weight: 500;
+  font-style: normal;
+}
