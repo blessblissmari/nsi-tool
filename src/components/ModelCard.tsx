@@ -3022,7 +3022,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
           </div>
         )}
 
-        <h4 style={{ margin: '8px 0 4px' }}>BOM — все ТМЦ (материалы + запчасти)</h4>
+        <h4 style={{ margin: '8px 0 4px' }}>Полная спецификация ТМЦ (зап.части и материалы)</h4>
         <table className="models">
           <thead>
             <tr>
@@ -3047,7 +3047,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
         </table>
 
         <h4 style={{ margin: '12px 0 4px' }}>
-          APL — запчасти в разрезе ВВ (без расходных материалов)
+          Зап.части в привязке к виду ТОиР
         </h4>
         {Array.from(aplGroups.values()).map((g, gi) => (
           <div key={gi} style={{ marginBottom: 8 }}>
@@ -3083,7 +3083,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
         ))}
 
         <h4 style={{ margin: '12px 0 4px' }}>
-          AOPL — детали в разрезе компонент агрегата
+          Зап.части в привязке к операции ТОиР
         </h4>
         {aoplGroups.size === 0 && (
           <div className="muted small">
