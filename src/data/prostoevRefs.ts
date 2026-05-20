@@ -34,6 +34,13 @@ interface RawRefs {
 
 const raw = rawRefs as unknown as RawRefs;
 
+const STANDARD_OPS = new Set([
+  'Демонтаж', 'Монтаж', 'Осмотр', 'Смазка', 'Замена', 'Регулировка',
+  'Диагностика', 'Чистка', 'Проверка', 'Промывка', 'Ревизия', 'Испытание',
+  'Контроль', 'Затяжка', 'Центровка', 'Балансировка', 'Покраска',
+  'Продувка', 'Прокачка', 'Опрессовка',
+]);
+
 export const PROSTOEV_ACTIONS_BY_MODEL: RawRefs['actionsByModel'] =
   raw.actionsByModel;
 
@@ -49,7 +56,7 @@ export const PROSTOEV_REFERENCES: ReferenceData = {
       ? periods.map((p) => ({ name, periodHours: p }))
       : [{ name, periodHours: 0 }],
   ),
-  operations: raw.operations.map((n) => ({ name: n, standard: false })),
+  operations: raw.operations.map((n) => ({ name: n, standard: STANDARD_OPS.has(n) || n.length <= 15 })),
   specialties: raw.specialties.map((s) => ({
     name: s.name,
     qualifications: s.qualifications,

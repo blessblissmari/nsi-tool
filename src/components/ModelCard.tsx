@@ -434,8 +434,8 @@ export function ModelCard({ modelId }: { modelId: string }) {
     const addAggregateRow = () =>
       upsert(modelId, {
         isAggregate: true,
-        component: '',
-        subcomponent: '',
+        component: undefined,
+        subcomponent: undefined,
         operation: '',
         actionId: filterActionId,
         source: 'manual',
@@ -1118,20 +1118,16 @@ export function ModelCard({ modelId }: { modelId: string }) {
         </div>
         {ops.length > 0 && (
           <datalist id={`ops-${modelId}`}>
-            {/* Заказчик 14.05: «по стрелке открывается список, что в него попадает?
-                сейчас некорректный выбор предлагает». Сортируем: стандартные сначала,
-                далее по алфавиту; ограничиваем 50, чтобы браузер не предлагал мусор. */}
-            {[...ops]
-              .sort((a, b) => {
-                if (!!b.standard !== !!a.standard) return b.standard ? 1 : -1;
-                return a.name.localeCompare(b.name, 'ru');
-              })
-              .slice(0, 50)
-              .map((o, i) => (
+            {/* Standard operations first, then alphabetical. Show all standard ones + top 30 others */}
+            {(() => {
+              const standard = ops.filter(o => o.standard);
+              const others = ops.filter(o => !o.standard).sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+              return [...standard, ...others.slice(0, 30)].map((o, i) => (
                 <option key={i} value={o.name}>
                   {o.standard ? '★ стандарт' : ''}
                 </option>
-              ))}
+              ));
+            })()}
           </datalist>
         )}
         {specs.length > 0 && (
@@ -1168,7 +1164,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
           );
         })()}
         <details className="muted small" style={{ marginTop: 6 }}>
-          <summary>Правила нормализации (созвон 28.04.2026)</summary>
+          <summary>Правила нормализации техкарт</summary>
           <ul style={{ margin: '4px 0 0 16px' }}>
             <li>В Элемент/Подэлемент <strong>не вносим</strong> крепёж: гайки, шайбы, винты, шпильки, хомуты, болты, штифты, шпонки.</li>
             <li>Если в строке несколько слов — первое всегда <strong>существительное</strong>.</li>
@@ -1580,17 +1576,39 @@ export function ModelCard({ modelId }: { modelId: string }) {
         const lockedNames = new Set(
           locked.map((x) => x.name.toLowerCase().trim()),
         );
-        const newItems: ActionItem[] = proposals
-          .filter((p) => !lockedNames.has(p.name.toLowerCase().trim()))
-          .map((p) => ({
-            id: newId('a'),
-            name: p.name,
-            kind: p.kind,
-            periodHours: p.periodHours,
-            source: sourceTag,
-            note: p.reason,
-          }));
-        setItems([...locked, ...newItems]);
+
+        // For 'web' mode (enrichment), MERGE with existing instead of replacing
+        if (sourceTag === 'web') {
+          const existingNames = new Set(items.map((x) => x.name.toLowerCase().trim()));
+          const newItems: ActionItem[] = proposals
+            .filter((p) => !existingNames.has(p.name.toLowerCase().trim()))
+            .map((p) => ({
+              id: newId('a'),
+              name: p.name,
+              kind: p.kind,
+              periodHours: p.periodHours,
+              source: sourceTag,
+              note: p.reason,
+            }));
+          if (newItems.length === 0) {
+            alert('Новых ВВ не найдено — все предложенные виды уже есть в списке.');
+            return;
+          }
+          setItems([...items, ...newItems]);
+        } else {
+          // For 'ai' mode, replace non-locked as before
+          const newItems: ActionItem[] = proposals
+            .filter((p) => !lockedNames.has(p.name.toLowerCase().trim()))
+            .map((p) => ({
+              id: newId('a'),
+              name: p.name,
+              kind: p.kind,
+              periodHours: p.periodHours,
+              source: sourceTag,
+              note: p.reason,
+            }));
+          setItems([...locked, ...newItems]);
+        }
       } catch (e) {
         alert('Ошибка ИИ: ' + (e as Error).message);
       }
@@ -1789,6 +1807,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
   function PropsTab({ modelId }: { modelId: string }) {
     const m = useStore((s) => s.models.find((x) => x.id === modelId));
     const acceptProposal = useStore((s) => s.acceptProposal);
+    const [status, setStatus] = useState<{text: string; tone: 'info'|'ok'|'warn'|'error'} | null>(null);
     if (!m) return null;
     const classes = classifier.classes.map((c) => c.name);
     const cur = classifier.classes.find((c) => c.name === m.className);
@@ -1905,11 +1924,15 @@ export function ModelCard({ modelId }: { modelId: string }) {
                   classificationConfidence: r.confidence,
                   classificationProposals: r.proposals,
                 });
-              } else {
+                setStatus({ text: `Классифицировано: ${r.className}${r.subclassName ? ' / ' + r.subclassName : ''} (${Math.round(r.confidence * 100)}%)`, tone: 'ok' });
+              } else if (r.proposals.length) {
                 update(m.id, {
                   classificationProposals: r.proposals,
                   classificationConfidence: r.confidence,
                 });
+                setStatus({ text: `Совпадений не найдено, но есть ${r.proposals.length} кандидат(ов). Выберите ниже.`, tone: 'warn' });
+              } else {
+                setStatus({ text: 'Не удалось классифицировать: нет совпадений в классификаторе. Попробуйте «Спросить ИИ» или выберите вручную.', tone: 'warn' });
               }
             }}
             title="Подобрать класс/подкласс по классификатору"
@@ -1978,6 +2001,11 @@ export function ModelCard({ modelId }: { modelId: string }) {
           </label>
         </div>
         <ImageField modelId={m.id} />
+        {status && (
+          <div className={`grid2-full status-banner status-${status.tone}`} style={{ marginTop: 6 }}>
+            {status.text}
+          </div>
+        )}
         {showProposals.length > 0 && (
           <div className="grid2-full">
             <div className="muted small" style={{ marginBottom: 4 }}>
@@ -2354,6 +2382,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
             targetUnit: keys.find((k) => k.key === x.key)?.unit,
             isPriority: true,
             priorityOrder: keys.findIndex((k) => k.key === x.key),
+            confidence: (x as { confidence?: number }).confidence,
             source: 'web' as const,
           }));
         setChars([...locked, ...keepManual, ...webChars]);
@@ -2601,7 +2630,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
                       (c.valueNum !== undefined ? fmtNum(c.valueNum) : '—')}
                   </td>
                   <td className="muted small">
-                    <SourceBadge source={c.source} />
+                    <SourceBadge source={c.source} confidence={c.confidence} />
                     <button
                       className="link-btn"
                       title="Окно с обоснованием (п.7.5 ТЗ): фрагмент документа, источник или правило, на основании которого заполнено поле."
@@ -2946,17 +2975,15 @@ export function ModelCard({ modelId }: { modelId: string }) {
             {busy === 'bom' ? '…' : 'BOM из интернета'}
           </button>
           <button
-            disabled={!hasKey || !!busy || acts.length === 0}
+            disabled={!m.className}
             title={
-              !hasKey
-                ? 'Укажите OpenAI ключ в «Настройках»'
-                : acts.length === 0
-                  ? 'Сначала добавьте ВВ во вкладке «ВВ»'
-                  : 'Дополнить APL типовыми запчастями из открытых источников (п.6.6 ТЗ)'
+              !m.className
+                ? 'Сначала классифицируйте модель'
+                : 'Подобрать APL из аналогов того же класса/подкласса (без обращения к интернету)'
             }
-            onClick={() => enrichFromWeb('apl')}
+            onClick={() => setAnalogsOpen('apl')}
           >
-            {busy === 'apl' ? '…' : 'APL из интернета'}
+            {busy === 'apl' ? '…' : 'APL из аналогов'}
           </button>
           <button
             disabled={!m.className}
@@ -3091,7 +3118,19 @@ export function ModelCard({ modelId }: { modelId: string }) {
             items={webSuggestions.items}
             actions={acts}
             onAccept={(picked) => {
-              for (const x of picked) {
+              // Deduplicate against existing tech card rows
+              const existing = new Set(
+                (m.techCard ?? [])
+                  .filter(r => r.tmcName)
+                  .map(r => `${(r.tmcName ?? '').trim().toLowerCase()}|${(r.tmcUnit ?? '').toLowerCase()}|${r.tmcKind ?? ''}`)
+              );
+              const unique = picked.filter(x => {
+                const key = `${x.tmcName.trim().toLowerCase()}|${(x.tmcUnit ?? '').toLowerCase()}|${x.tmcKind}`;
+                if (existing.has(key)) return false;
+                existing.add(key);
+                return true;
+              });
+              for (const x of unique) {
                 upsertTcRow(modelId, {
                   actionId: x.actionId,
                   tmcName: x.tmcName,

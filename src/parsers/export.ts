@@ -269,8 +269,12 @@ export function downloadWorkbook(
   const a = document.createElement('a');
   a.href = url;
   a.download = fileName;
+  a.style.display = 'none';
   document.body.appendChild(a);
   a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  // Use requestAnimationFrame to delay removal
+  requestAnimationFrame(() => {
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  });
 }
