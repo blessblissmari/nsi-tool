@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '../store';
 import {
   getUiSettings,
@@ -217,8 +217,27 @@ export function ModelCard({ modelId }: { modelId: string }) {
     const upsert = useStore((s) => s.upsertTechCardRow);
     const del = useStore((s) => s.deleteTechCardRow);
     const setTechCard = useStore((s) => s.setTechCard);
+    const dedupe = useStore((s) => s.dedupeTechCard);
     const [aiBusy, setAiBusy] = useState(false);
-    const [aiErr, setAiErr] = useState('');
+    // Статус-баннер с уровнем. info / ok / warn / error — по просьбе заказчика
+    // (14.05): «добавить подсказку по результату работы кнопок» — все сообщения идут сюда.
+    type Tone = 'info' | 'ok' | 'warn' | 'error';
+    const [status, setStatus] = useState<{ text: string; tone: Tone } | null>(null);
+    const announce = (text: string, tone: Tone = 'info') => {
+      setStatus({ text, tone });
+    };
+    const setAiErr = (text: string) => announce(text, text ? 'warn' : 'info');
+    // Сохранённый скролл таблицы — чтобы при редактировании правых полей таблица
+    // не прыгала влево при ререндере (сообщение заказчика 14.05). Обновляем в
+    // useEffect после каждого рендера.
+    const tcScrollRef = useRef<HTMLDivElement | null>(null);
+    const savedScroll = useRef<{ left: number; top: number }>({ left: 0, top: 0 });
+    useEffect(() => {
+      const el = tcScrollRef.current;
+      if (!el) return;
+      if (savedScroll.current.left) el.scrollLeft = savedScroll.current.left;
+      if (savedScroll.current.top) el.scrollTop = savedScroll.current.top;
+    });
     /**
      * Фильтр по виду воздействия (ВВ): техкарта подстраивается под выбранный
      * вид (например, «только ТО-1»). По умолчанию — все ВВ.
@@ -271,13 +290,40 @@ export function ModelCard({ modelId }: { modelId: string }) {
       колёсико: 'колесо',
     };
     const isLikelyAdjective = (w: string) =>
-      /(?:ный|ная|ное|ные|ая|ое|ые|ой|ий|яя|ее|ие|ьный|ьная|ьное|ьные|ний|няя|нее|ние|ского|ская|ское|ские|зной|зная)$/u.test(
+      /(?:ный|ная|ное|ные|ая|ое|ые|ой|ий|ый|яя|ее|ие|ьный|ьная|ьное|ьные|ний|няя|нее|ние|ского|ская|ское|ские|зной|зная|чий|чая|чее|чие|тый|тая|тое|тые)$/u.test(
         w,
       );
+    // Эвристика приведения существительного к единственному числу + именительному падежу.
+    // Браузер не умеет морфологию — список окончаний накапливается под реальные кейсы.
     const toSingularNominative = (w: string): string => {
       if (!w || w.length <= 3) return w;
+      // Сначала — конкретные ловушки (несколько форм одного слова).
+      const exact: Record<string, string> = {
+        колёса: 'колесо',
+        колеса: 'колесо',
+        крылья: 'крыло',
+        диски: 'диск',
+        втулки: 'втулка',
+        вкладыши: 'вкладыш',
+        ножи: 'нож',
+        ремни: 'ремень',
+        тяги: 'тяга',
+        пружины: 'пружина',
+        рычаги: 'рычаг',
+        шестерни: 'шестерня',
+        кольца: 'кольцо',
+        манжеты: 'манжета',
+        ролики: 'ролик',
+        зубья: 'зуб',
+        лопасти: 'лопасть',
+        фланцы: 'фланец',
+        ступицы: 'ступица',
+      };
+      if (exact[w]) return exact[w];
       if (/нки$/u.test(w)) return w.slice(0, -1) + 'а';
       if (/тки$/u.test(w)) return w.slice(0, -1) + 'а';
+      // -ёса / -еса → -есо (колёса → колесо, колеса → колесо).
+      if (/[её]са$/u.test(w)) return w.slice(0, -1) + 'о';
       if (/[бвгджзклмнпрстфхцчшщ]ы$/u.test(w)) return w.slice(0, -1);
       if (/[бвгджзклмнпрстфхцчшщ]и$/u.test(w)) return w.slice(0, -1) + 'ь';
       if (/иями$/u.test(w)) return w.slice(0, -4) + 'ие';
@@ -285,6 +331,8 @@ export function ModelCard({ modelId }: { modelId: string }) {
       if (/ии$/u.test(w)) return w.slice(0, -1) + 'е';
       if (/ями$/u.test(w)) return w.slice(0, -3) + 'ь';
       if (/ами$/u.test(w)) return w.slice(0, -3) + 'а';
+      // -цы → -ец (фланцы → фланец).
+      if (/цы$/u.test(w)) return w.slice(0, -2) + 'ец';
       return w;
     };
     const cleanNameText = (s: string): string => {
@@ -314,12 +362,24 @@ export function ModelCard({ modelId }: { modelId: string }) {
         if (idx > 0) {
           const noun = words[idx];
           words = [noun, ...words.filter((_, i) => i !== idx)];
+        } else if (idx === -1) {
+          // Все слова распознаны как прилагательные — существительное
+          // не найдено вовсе. Явно сообщаем пользователю.
+          warnings.push(
+            'Первое слово должно быть существительным (сейчас все слова распознаны как прилагательные).',
+          );
         }
       }
       const head = (words[0] ?? '').toLowerCase();
       if (FORBIDDEN_FASTENERS.includes(head)) {
         warnings.push(
           `«${head}» нельзя использовать как Элемент/Подэлемент. Укажите узел, к которому относится крепёж.`,
+        );
+      } else if (words.length > 1 && isLikelyAdjective(head)) {
+        // Контрольная проверка: если после нормализации первое слово
+        // всё ещё похоже на прилагательное — предупреждаем.
+        warnings.push(
+          'Первое слово должно быть существительным.',
         );
       }
       return { text: cap(words.join(' ')), warnings };
@@ -392,26 +452,16 @@ export function ModelCard({ modelId }: { modelId: string }) {
       });
       setTechCard(modelId, sorted);
     };
-    const dedupeRows = () => {
-      const seen = new Set<string>();
-      const out: typeof allRows = [];
-      for (const r of allRows) {
-        const key = [
-          r.isAggregate ? 'AGG' : (r.component ?? '').trim().toLowerCase(),
-          (r.subcomponent ?? '').trim().toLowerCase(),
-          (r.operation ?? '').trim().toLowerCase(),
-          (r.specialty ?? '').trim().toLowerCase(),
-          (r.qualification ?? '').trim().toLowerCase(),
-          (r.tmcName ?? '').trim().toLowerCase(),
-          (r.tmcUnit ?? '').trim().toLowerCase(),
-        ].join('|');
-        if (seen.has(key)) continue;
-        seen.add(key);
-        out.push(r);
+    // Автодедуп вынесён в store (`dedupeTechCard`) и вызывается после любой
+    // пачки вставок (ИИ, ручные правки на onBlur ключевых полей, массовая нормализация).
+    // Кнопка «убрать дубли» убрана по просьбе заказчика 14.05.
+    const autoDedupe = (msg?: string) => {
+      const removed = dedupe(modelId);
+      if (msg) {
+        announce(removed > 0 ? `${msg} Авто-дедуп: удалено ${removed}.` : msg, 'ok');
+      } else if (removed > 0) {
+        announce(`Авто-дедуп: удалено дублей ${removed}.`, 'ok');
       }
-      const removed = allRows.length - out.length;
-      setTechCard(modelId, out);
-      setAiErr(removed > 0 ? `Удалено дублей: ${removed}.` : 'Дублей не найдено.');
     };
 
     /**
@@ -453,7 +503,10 @@ export function ModelCard({ modelId }: { modelId: string }) {
         warns.push(...elem.warnings, ...sub.warnings);
       }
       const head = touched ? `Нормализовано: ${touched}` : 'Все строки уже нормализованы.';
-      setAiErr(warns.length ? `${head}. Замечаний: ${warns.length}.` : head);
+      const msg = warns.length ? `${head}. Замечаний: ${warns.length}.` : head;
+      announce(msg, warns.length ? 'warn' : 'ok');
+      // После нормализации могли совпасть ключи у строк — проверяем дубли.
+      autoDedupe();
     };
 
     /** Этап 3 ручного workflow: «Состав» (Элемент / Подэлемент). */
@@ -490,6 +543,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
             source: 'ai',
           });
         }
+        autoDedupe(`Шаг 1 «Состав»: добавлено позиций ${result.length}.`);
       } catch (e) {
         setAiErr('Ошибка ИИ: ' + (e instanceof Error ? e.message : String(e)));
       } finally {
@@ -558,6 +612,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
             source: 'ai',
           });
         }
+        autoDedupe(`Шаг 2 «Операции»: добавлено позиций ${result.length}.`);
       } catch (e) {
         setAiErr('Ошибка ИИ: ' + (e instanceof Error ? e.message : String(e)));
       } finally {
@@ -624,6 +679,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
             source: 'ai',
           });
         }
+        autoDedupe(`Шаг 3 «Поиск в интернете»: добавлено позиций ${result.length}.`);
       } catch (e) {
         setAiErr('Ошибка ИИ: ' + (e instanceof Error ? e.message : String(e)));
       } finally {
@@ -659,7 +715,13 @@ export function ModelCard({ modelId }: { modelId: string }) {
               <option value="__none__">— без привязки —</option>
             </select>
           </label>
-          <button onClick={addBlankRow}>+ строка</button>
+          {/* Базовые действия со строками. */}
+          <button
+            onClick={addBlankRow}
+            title="Добавить пустую строку в техкарту для ручного ввода."
+          >
+            + строка
+          </button>
           <button
             onClick={addAggregateRow}
             title="Добавить операцию на сам агрегат (без указания Элемент/Подэлемент)."
@@ -673,50 +735,49 @@ export function ModelCard({ modelId }: { modelId: string }) {
           >
             ↕ по элементу
           </button>
+          {/* Нумерованные шаги ручного workflow (сообщение заказчика 14.05). */}
+          <span className="step-sep muted small" aria-hidden>│</span>
           <button
-            onClick={dedupeRows}
-            disabled={rows.length === 0}
-            title="Удалить дубли по Элементу+Подэлементу+Операции+Профессии+ТМЦ."
-          >
-            ✂ убрать дубли
-          </button>
-          <button
+            className="step-btn"
             onClick={fillElementsAi}
             disabled={aiBusy || !hasKey}
             title={
               !hasKey
                 ? 'Укажите OpenAI ключ в «Настройках».'
-                : 'Этап 3 ручного workflow: ИИ заполняет состав (Элемент / Подэлемент) по правилам заказчика — без крепежа, существ. в им.падеже ед.числе.'
+                : 'Шаг 1 (состав): ИИ выписывает Элементы/Подэлементы из источника/интернета по правилам заказчика — без крепежа, существ. в им.падеже ед.числе.'
             }
           >
-            {aiBusy ? '…' : '🧩 Состав'}
+            {aiBusy ? '…' : '1. 🧩 Состав'}
           </button>
           <button
+            className="step-btn"
             onClick={fillOperationsAi}
             disabled={aiBusy || !hasKey || rows.length === 0}
             title={
               !hasKey
                 ? 'Укажите OpenAI ключ в «Настройках».'
                 : rows.length === 0
-                  ? 'Сначала заполните состав (кнопка «🧩 Состав»).'
-                  : 'Этап 4: ИИ заполняет операции по правилам заказчика — Замена→Демонтаж+Монтаж, обязательная пара Демонтаж/Монтаж.'
+                  ? 'Сначала выполните  1. Состав» или добавьте строки вручную.'
+                  : 'Шаг 2 (операции): ИИ выписывает операции на агрегат и на Элементы/Подэлементы. Замена→Демонтаж+Монтаж.'
             }
           >
-            {aiBusy ? '…' : '🔧 Операции'}
+            {aiBusy ? '…' : '2. 🔧 Операции'}
           </button>
           <button
+            className="step-btn"
             onClick={fillByAi}
             disabled={aiBusy || !hasKey || acts.length === 0}
             title={
               !hasKey
                 ? 'Укажите OpenAI ключ в «Настройках».'
                 : acts.length === 0
-                  ? 'Добавьте хотя бы одно ВВ перед заполнением ИИ.'
-                  : 'Сгенерировать техкарту целиком: ИИ ищет в интернете типовые операции и ТМЦ под класс/подкласс и список ВВ.'
+                  ? 'Добавьте хотя бы одно ВВ (вкладка «ВВ»).'
+                  : 'Шаг 3+ (ВВ/профессии/трудозатраты/ТМЦ): ИИ ищет в интернете типовые операции и ТМЦ под класс/подкласс и список ВВ.'
             }
           >
-            {aiBusy ? '…ИИ работает' : '🌐 Поиск в интернете'}
+            {aiBusy ? '…ИИ работает' : '3. 🌐 Поиск в интернете'}
           </button>
+          <span className="step-sep muted small" aria-hidden>│</span>
           <button
             onClick={normalizeAllRows}
             disabled={rows.length === 0}
@@ -748,14 +809,48 @@ export function ModelCard({ modelId }: { modelId: string }) {
               <> · загрузите «Справочник операций.xlsx» для autocomplete</>
             )}
           </span>
-          {aiErr && (
-            <span className="small" style={{ color: 'crimson' }}>
-              {aiErr}
-            </span>
-          )}
         </div>
-        <div style={{ overflowX: 'auto' }}>
-          <table className="models">
+        {(() => {
+          // Подсказка «следующий шаг» — заказчик (14.05): «состав получил, операции получил,
+          //  дальше что?». Подсказываем, что делать дальше.
+          const hasComp = rows.some((r) => r.component || r.isAggregate);
+          const hasOp = rows.some((r) => r.operation);
+          const hasAction = rows.some((r) => r.actionId);
+          const hasSpec = rows.some((r) => r.specialty);
+          const hasLabor = rows.some((r) => r.laborHours || r.totalLaborHours);
+          const hasTmc = rows.some((r) => r.tmcName);
+          let next: string;
+          if (!hasComp) next = 'Начните с «1. Состав» или добавьте строки вручную.';
+          else if (!hasOp) next = 'Следующий шаг: «2. Операции».';
+          else if (!hasAction) next = 'Следующий шаг: укажите ВВ в колонке «ВВ» (или добавьте во вкладке «ВВ»).';
+          else if (!hasSpec) next = 'Следующий шаг: укажите Профессию/Разряд.';
+          else if (!hasLabor) next = 'Следующий шаг: расставьте Трудозатраты (ч на профессию).';
+          else if (!hasTmc) next = 'Следующий шаг: выпишите ТМЦ (наименование + ед.изм. + кол-во).';
+          else next = 'Порядок выполнен. Добавьте остальные строки или перейдите на вкладку «Спецификации».';
+          return (
+            <div className={`status-banner status-${status?.tone ?? 'info'}`}>
+              <span className="status-next">{next}</span>
+              {status?.text && (
+                <>
+                  <span className="muted" style={{ margin: '0 6px' }}>·</span>
+                  <span>{status.text}</span>
+                </>
+              )}
+            </div>
+          );
+        })()}
+        {/* Прокрутка таблицы ограничена по высоте + свой скролл — горизонтальная
+            полоса прокрутки всегда в видимой области (сообщение заказчика 14.05). */}
+        <div
+          ref={tcScrollRef}
+          className="tc-scroll"
+          onScroll={(e) => {
+            const el = e.currentTarget as HTMLDivElement;
+            savedScroll.current.left = el.scrollLeft;
+            savedScroll.current.top = el.scrollTop;
+          }}
+        >
+          <table className="models tc-table">
             <thead>
               <tr>
                 <th style={{ width: 140 }}>Элемент</th>
@@ -1023,11 +1118,20 @@ export function ModelCard({ modelId }: { modelId: string }) {
         </div>
         {ops.length > 0 && (
           <datalist id={`ops-${modelId}`}>
-            {ops.map((o, i) => (
-              <option key={i} value={o.name}>
-                {o.standard ? '★ стандарт' : ''}
-              </option>
-            ))}
+            {/* Заказчик 14.05: «по стрелке открывается список, что в него попадает?
+                сейчас некорректный выбор предлагает». Сортируем: стандартные сначала,
+                далее по алфавиту; ограничиваем 50, чтобы браузер не предлагал мусор. */}
+            {[...ops]
+              .sort((a, b) => {
+                if (!!b.standard !== !!a.standard) return b.standard ? 1 : -1;
+                return a.name.localeCompare(b.name, 'ru');
+              })
+              .slice(0, 50)
+              .map((o, i) => (
+                <option key={i} value={o.name}>
+                  {o.standard ? '★ стандарт' : ''}
+                </option>
+              ))}
           </datalist>
         )}
         {specs.length > 0 && (
@@ -2572,6 +2676,10 @@ export function ModelCard({ modelId }: { modelId: string }) {
     const allModels = useStore((s) => s.models);
     const upsertTcRow = useStore((s) => s.upsertTechCardRow);
     const [busy, setBusy] = useState<'bom' | 'apl' | null>(null);
+    // Статус-баннер по результату работы кнопок (заказчик 14.05).
+    type Tone = 'info' | 'ok' | 'warn' | 'error';
+    const [status, setStatus] = useState<{ text: string; tone: Tone } | null>(null);
+    const announce = (text: string, tone: Tone = 'info') => setStatus({ text, tone });
     const [webSuggestions, setWebSuggestions] = useState<{
       mode: 'bom' | 'apl';
       items: Array<{
@@ -2594,10 +2702,16 @@ export function ModelCard({ modelId }: { modelId: string }) {
     async function enrichFromWeb(mode: 'bom' | 'apl') {
       if (!m || busy) return;
       if (!hasKey) {
-        alert('Укажите OpenAI ключ в «Настройках».');
+        announce('Укажите OpenAI ключ в «Настройках».', 'warn');
         return;
       }
       setBusy(mode);
+      announce(
+        mode === 'bom'
+          ? 'ИИ ищет BOM в открытых источниках…'
+          : 'ИИ ищет APL в открытых источниках…',
+        'info',
+      );
       try {
         const items = await aiProvider().enrichBomFromWeb({
           model: {
@@ -2610,16 +2724,19 @@ export function ModelCard({ modelId }: { modelId: string }) {
           mode,
         });
         if (items.length === 0) {
-          alert(
-            'Из открытых источников не удалось предложить позиции — попробуйте указать класс/подкласс точнее.',
+          announce(
+            'Поиск не дал результатов: из открытых источников не удалось предложить позиции — попробуйте указать класс/подкласс точнее или загрузить документ.',
+            'warn',
           );
         } else {
           setWebSuggestions({ mode, items });
+          announce(`Готово: предложено позиций ${items.length}. Подтвердите вставку ниже.`, 'ok');
         }
       } catch (e) {
-        alert(
+        announce(
           'Ошибка обогащения из интернета: ' +
             (e instanceof Error ? e.message : String(e)),
+          'error',
         );
       } finally {
         setBusy(null);
@@ -2864,6 +2981,11 @@ export function ModelCard({ modelId }: { modelId: string }) {
             Поиск аналогов APL
           </button>
         </div>
+        {status && (
+          <div className={`status-banner status-${status.tone}`}>
+            {status.text}
+          </div>
+        )}
 
         <h4 style={{ margin: '8px 0 4px' }}>BOM — все ТМЦ (материалы + запчасти)</h4>
         <table className="models">

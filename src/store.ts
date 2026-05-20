@@ -93,6 +93,7 @@ interface Store {
     row: Partial<import('./domain/types').TechCardRow> & { id?: string },
   ): void;
   deleteTechCardRow(modelId: string, rowId: string): void;
+  dedupeTechCard(modelId: string): number;
   setTechCard(
     modelId: string,
     rows: import('./domain/types').TechCardRow[],
@@ -579,6 +580,43 @@ export const useStore = create<Store>()(
       m.id === modelId ? { ...m, techCard: rows } : m,
     );
     set({ models: next });
+  },
+  // Автоматический дедуп техкарты по ключу
+  //  (Элемент+Подэлемент+Операция+Профессия+Элемент ТМЦ+Ед.+ВВ).
+  // Сообщение заказчика 14.05: «в ТК убирать дубли он должен сам». Вызывается
+  // после любых батч-вставок (ИИ, массовая загрузка) и на onBlur ключевых полей.
+  dedupeTechCard(modelId) {
+    let removed = 0;
+    const next = get().models.map((m) => {
+      if (m.id !== modelId) return m;
+      const list = m.techCard ?? [];
+      const seen = new Set<string>();
+      const out: import('./domain/types').TechCardRow[] = [];
+      for (const r of list) {
+        const key = [
+          r.isAggregate ? 'AGG' : (r.component ?? '').trim().toLowerCase(),
+          (r.subcomponent ?? '').trim().toLowerCase(),
+          (r.operation ?? '').trim().toLowerCase(),
+          (r.specialty ?? '').trim().toLowerCase(),
+          (r.qualification ?? '').trim().toLowerCase(),
+          (r.tmcName ?? '').trim().toLowerCase(),
+          (r.tmcUnit ?? '').trim().toLowerCase(),
+          (r.actionId ?? '').trim().toLowerCase(),
+        ].join('|');
+        // Пустые строки (без операции и без ТМЦ) не дедупируем — это поля в процессе.
+        const isEmpty =
+          !r.component && !r.operation && !r.tmcName && !r.specialty && !r.isAggregate;
+        if (!isEmpty && seen.has(key)) {
+          removed++;
+          continue;
+        }
+        if (!isEmpty) seen.add(key);
+        out.push(r);
+      }
+      return { ...m, techCard: out };
+    });
+    if (removed > 0) set({ models: next });
+    return removed;
   },
   setFailures(modelId, failures) {
     const next = get().models.map((m) =>

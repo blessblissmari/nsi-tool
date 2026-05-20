@@ -84,7 +84,7 @@ export function AiSettings({ onClose }: Props) {
         >
           <h3 style={{ margin: 0 }}>Настройки</h3>
           <span style={{ flex: 1 }} />
-          <button onClick={onClose}>×</button>
+          <button onClick={onClose} title="Закрыть окно настроек.">×</button>
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -135,10 +135,14 @@ export function AiSettings({ onClose }: Props) {
               style={{ flex: 1, fontFamily: 'monospace' }}
               autoComplete="off"
             />
-            <button onClick={() => setRevealed((x) => !x)}>
+            <button
+              onClick={() => setRevealed((x) => !x)}
+              title={revealed ? 'Скрыть ключ.' : 'Показать ключ в явном виде.'}
+            >
               {revealed ? 'скрыть' : 'показать'}
             </button>
             <button
+              title="Сохранить ключ в localStorage браузера. На сервер не отправляется."
               onClick={() => {
                 setApiKey(key);
                 onClose();
@@ -147,6 +151,7 @@ export function AiSettings({ onClose }: Props) {
               сохранить
             </button>
             <button
+              title="Удалить ключ из localStorage браузера."
               onClick={() => {
                 setKey('');
                 setApiKey('');
@@ -179,8 +184,14 @@ export function AiSettings({ onClose }: Props) {
             </tbody>
           </table>
           <div style={{ display: 'flex', gap: 6 }}>
-            <button onClick={() => resetUsage()}>обнулить счётчик</button>
             <button
+              onClick={() => resetUsage()}
+              title="Обнулить счётчики расхода (запросы/токены/стоимость)."
+            >
+              обнулить счётчик
+            </button>
+            <button
+              title="Очистить кэш ответов ИИ (следующие запросы пойдут снова в OpenAI)."
               onClick={() => {
                 clearCache();
                 alert('Кэш ИИ очищен');

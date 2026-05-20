@@ -284,7 +284,7 @@ export function BulkProcessing({ onClose }: Props) {
         <div className="row-flex" style={{ alignItems: 'center', gap: 8 }}>
           <h3 style={{ margin: 0 }}>Массовая обработка моделей · п.6.3 ТЗ</h3>
           <span className="spacer" />
-          <button onClick={onClose}>закрыть</button>
+          <button onClick={onClose} title="Закрыть окно массовой обработки.">закрыть</button>
         </div>
 
         <div className="muted small">
@@ -481,6 +481,7 @@ export function BulkProcessing({ onClose }: Props) {
                   </td>
                   <td>
                     <button
+                      title="Открыть карточку модели и закрыть это окно."
                       onClick={() => {
                         select(m.id);
                         onClose();
