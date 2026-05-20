@@ -52,9 +52,21 @@ export interface ModelOption {
 
 export const MODEL_OPTIONS: ModelOption[] = [
   {
+    id: 'gpt41-mini',
+    label: 'GPT-4.1 mini (рекомендуется)',
+    description: 'Проверенная модель, доступна на всех ключах. $0.40/$1.60 за 1M токенов.',
+    fast: 'gpt-4.1-mini',
+    quality: 'gpt-4.1-mini',
+    priceFastIn: 0.4,
+    priceFastOut: 1.6,
+    priceQualityIn: 0.4,
+    priceQualityOut: 1.6,
+    supportsPdfVision: true,
+  },
+  {
     id: 'gpt5-mini',
-    label: 'GPT-5 mini (рекомендуется)',
-    description: '5-е поколение, дёшево и умно. $0.25/$2.00 за 1M токенов.',
+    label: 'GPT-5 mini',
+    description: '5-е поколение, дёшево и умно. $0.25/$2.00 за 1M токенов. Может быть недоступна на некоторых ключах.',
     fast: 'gpt-5-mini',
     quality: 'gpt-5-mini',
     priceFastIn: 0.25,
@@ -78,7 +90,7 @@ export const MODEL_OPTIONS: ModelOption[] = [
   {
     id: 'gpt41',
     label: 'GPT-4.1 mini + GPT-4.1',
-    description: 'Предыдущее поколение, проверенное. $0.40/$1.60 + $2/$8.',
+    description: 'GPT-4.1 mini для простых задач, GPT-4.1 для сложных. $0.40/$1.60 + $2/$8.',
     fast: 'gpt-4.1-mini',
     quality: 'gpt-4.1',
     priceFastIn: 0.4,
@@ -111,7 +123,7 @@ export function getModelChoice(): ModelOption {
       if (found) return found;
     }
   } catch { /* ignore */ }
-  return MODEL_OPTIONS[0]; // default: gpt-5-mini
+  return MODEL_OPTIONS[0]; // default: gpt-4.1-mini
 }
 
 export function setModelChoice(id: string): ModelOption {
@@ -311,7 +323,7 @@ export const openaiAiProvider: AiProvider = {
       subclasses: c.subclasses.map((s) => s.name),
     }));
     const cacheKey =
-      'classify:' + fingerprint(code, classOptions, input.docText?.slice(0, 200));
+      'classify_v2:' + fingerprint(code, classOptions, input.docText?.slice(0, 200));
 
     const docSnippet = (input.docText || '').slice(0, 1500);
     const system =
