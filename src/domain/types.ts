@@ -162,6 +162,8 @@ export interface DocumentRef {
   /** Распознанный текст (демо: вставленный экспертом). */
   parsedText?: string;
   parsedAt?: string;
+  /** PDF в base64 для прямой отправки в AI API (vision). */
+  pdfBase64?: string;
 }
 
 export interface Characteristic {
