@@ -679,7 +679,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
             source: 'ai',
           });
         }
-        autoDedupe(`Шаг 3 «Поиск в интернете»: добавлено позиций ${result.length}.`);
+        autoDedupe(`Тех.карта заполнена: ${result.length} строк.`);
       } catch (e) {
         setAiErr('Ошибка ИИ: ' + (e instanceof Error ? e.message : String(e)));
       } finally {
@@ -735,34 +735,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
           >
             ↕ по элементу
           </button>
-          {/* Нумерованные шаги ручного workflow (сообщение заказчика 14.05). */}
           <span className="step-sep muted small" aria-hidden>│</span>
-          <button
-            className="step-btn"
-            onClick={fillElementsAi}
-            disabled={aiBusy || !hasKey}
-            title={
-              !hasKey
-                ? 'Укажите OpenAI ключ в «Настройках».'
-                : 'Шаг 1 (состав): ИИ выписывает Элементы/Подэлементы из источника/интернета по правилам заказчика — без крепежа, существ. в им.падеже ед.числе.'
-            }
-          >
-            {aiBusy ? '…' : '1. 🧩 Состав'}
-          </button>
-          <button
-            className="step-btn"
-            onClick={fillOperationsAi}
-            disabled={aiBusy || !hasKey || rows.length === 0}
-            title={
-              !hasKey
-                ? 'Укажите OpenAI ключ в «Настройках».'
-                : rows.length === 0
-                  ? 'Сначала выполните  1. Состав» или добавьте строки вручную.'
-                  : 'Шаг 2 (операции): ИИ выписывает операции на агрегат и на Элементы/Подэлементы. Замена→Демонтаж+Монтаж.'
-            }
-          >
-            {aiBusy ? '…' : '2. 🔧 Операции'}
-          </button>
           <button
             className="step-btn"
             onClick={fillByAi}
@@ -772,10 +745,10 @@ export function ModelCard({ modelId }: { modelId: string }) {
                 ? 'Укажите OpenAI ключ в «Настройках».'
                 : acts.length === 0
                   ? 'Добавьте хотя бы одно ВВ (вкладка «ВВ»).'
-                  : 'Шаг 3+ (ВВ/профессии/трудозатраты/ТМЦ): ИИ ищет в интернете типовые операции и ТМЦ под класс/подкласс и список ВВ.'
+                  : 'ИИ заполнит тех.карту целиком: состав, операции, трудозатраты, ТМЦ.'
             }
           >
-            {aiBusy ? '…ИИ работает' : '3. 🌐 Поиск в интернете'}
+            {aiBusy ? '…ИИ работает' : '🤖 Заполнить тех.карту'}
           </button>
           <span className="step-sep muted small" aria-hidden>│</span>
           <button
@@ -1613,6 +1586,14 @@ export function ModelCard({ modelId }: { modelId: string }) {
         alert('Ошибка ИИ: ' + (e as Error).message);
       }
     };
+
+    // Auto-suggest ВВ on tab open when list is empty
+    useEffect(() => {
+      if (items.length === 0 && getApiKey() && m.className) {
+        aiSuggest('web');
+      }
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     return (
       <div>
