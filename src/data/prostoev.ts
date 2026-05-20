@@ -216,17 +216,20 @@ export const PROSTOEV_CLASSIFIER: Classifier = {
     },
     {
       name: 'Станки',
-      keywords: ['станк'],
+      keywords: ['станк', 'станок', 'lathe', 'mill'],
       priorityChars: [],
       subclasses: [
         {
           name: 'Токарно-фрезерные',
-          keywords: ['токарн'],
+          keywords: ['токарн', 'фрезерн', 'токарно', 'mml', 'mml2550'],
+          patterns: ['MML', '16[A-Зa-з]\\d', '1[А-Д]\\d{2,3}'],
           priorityChars: [
             { key: 'Мощность', unit: 'кВт', type: 'number' },
             { key: 'Масса', unit: 'кг', type: 'number' },
             { key: 'Напряжение', unit: 'В', type: 'number' },
             { key: 'Габаритные размеры', unit: 'мм', type: 'number' },
+            { key: 'Расстояние между центрами', unit: 'мм', type: 'number' },
+            { key: 'Высота центров', unit: 'мм', type: 'number' },
           ],
         },
         {

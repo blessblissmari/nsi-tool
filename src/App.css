@@ -734,6 +734,11 @@ select:focus {
   border-color: #999;
   color: #444;
 }
+.src-database {
+  background: #e9f5ec;
+  border-color: #5fad7a;
+  color: #1f5b32;
+}
 
 /* Кнопка-ссылка без рамки (для иконок 📎 и т.п. в таблицах). */
 .link-btn {
@@ -748,7 +753,7 @@ select:focus {
   text-decoration: underline;
 }
 
-/* Подсветка строк техкарты по источнику данных (созвон 28.04.2026). */
+/* Подсветка строк техкарты по источнику данных. */
 table.models tr.src-document > td { background: #eef5ff; }
 table.models tr.src-web      > td { background: #f5e7fa; }
 table.models tr.src-analog   > td { background: #fff8d6; }
@@ -786,6 +791,12 @@ table.models input.warn {
   border: 1px solid var(--bg-dim);
   border-radius: 4px;
   background: var(--bg);
+  scroll-behavior: smooth;
+}
+/* Ensure the whole page scrolls when tech cards overflow */
+.model-card .tab-body {
+  overflow: visible;
+  min-height: 0;
 }
 .tc-scroll table.tc-table {
   margin: 0;

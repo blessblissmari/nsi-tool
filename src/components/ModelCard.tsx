@@ -23,6 +23,7 @@ import type {
   ActionKind,
   Characteristic,
   DocumentRef,
+  HierarchyNode,
 } from '../domain/types';
 import { extractTextFromFile, extractTextFromUrl } from '../parsers/docText';
 import { aiProvider } from '../domain/ai';
@@ -434,8 +435,8 @@ export function ModelCard({ modelId }: { modelId: string }) {
     const addAggregateRow = () =>
       upsert(modelId, {
         isAggregate: true,
-        component: '',
-        subcomponent: '',
+        component: undefined,
+        subcomponent: undefined,
         operation: '',
         actionId: filterActionId,
         source: 'manual',
@@ -517,7 +518,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
         return;
       }
       setAiBusy(true);
-      setAiErr('');
+      announce('ИИ формирует состав оборудования…', 'info');
       try {
         const docText = (m.documents ?? [])
           .map((d) => d.parsedText ?? '')
@@ -533,7 +534,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
           docText: docText || undefined,
         });
         if (result.length === 0) {
-          setAiErr('ИИ не вернул состав. Очистите кэш ИИ и повторите.');
+          announce('ИИ не вернул состав. Проверьте класс/подкласс модели и повторите.', 'warn');
           return;
         }
         for (const r of result) {
@@ -545,7 +546,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
         }
         autoDedupe(`Шаг 1 «Состав»: добавлено позиций ${result.length}.`);
       } catch (e) {
-        setAiErr('Ошибка ИИ: ' + (e instanceof Error ? e.message : String(e)));
+        announce('Ошибка ИИ: ' + (e instanceof Error ? e.message : String(e)), 'error');
       } finally {
         setAiBusy(false);
       }
@@ -571,11 +572,11 @@ export function ModelCard({ modelId }: { modelId: string }) {
           });
       }
       if (compsMap.size === 0) {
-        setAiErr('Сначала заполните состав (этап 3 — кнопка «🧩 Состав»).');
+        announce('Сначала заполните состав (шаг 1 — кнопка «Состав»).', 'warn');
         return;
       }
       setAiBusy(true);
-      setAiErr('');
+      announce(`ИИ формирует операции для ${compsMap.size} элементов…`, 'info');
       try {
         const docText = (m.documents ?? [])
           .map((d) => d.parsedText ?? '')
@@ -593,7 +594,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
           docText: docText || undefined,
         });
         if (result.length === 0) {
-          setAiErr('ИИ не вернул операции. Очистите кэш ИИ и повторите.');
+          announce('ИИ не вернул операции. Проверьте класс/подкласс и повторите.', 'warn');
           return;
         }
         // Удаляем существующие пустые строки (component без operation),
@@ -614,7 +615,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
         }
         autoDedupe(`Шаг 2 «Операции»: добавлено позиций ${result.length}.`);
       } catch (e) {
-        setAiErr('Ошибка ИИ: ' + (e instanceof Error ? e.message : String(e)));
+        announce('Ошибка ИИ: ' + (e instanceof Error ? e.message : String(e)), 'error');
       } finally {
         setAiBusy(false);
       }
@@ -627,11 +628,11 @@ export function ModelCard({ modelId }: { modelId: string }) {
         return;
       }
       if (acts.length === 0) {
-        setAiErr('Нет ВВ — добавьте хотя бы одно ВВ (вкладка «ВВ»).');
+        announce('Нет ВВ — добавьте хотя бы одно ВВ (вкладка «ВВ»).', 'warn');
         return;
       }
       setAiBusy(true);
-      setAiErr('');
+      announce('ИИ ищет типовые операции и ТМЦ в интернете…', 'info');
       try {
         const result = await aiProvider().fillTechCardByTemplate({
           model: {
@@ -652,8 +653,9 @@ export function ModelCard({ modelId }: { modelId: string }) {
           })),
         });
         if (result.length === 0) {
-          setAiErr(
+          announce(
             'ИИ вернул пустую техкарту. Проверьте, что класс/подкласс заполнены; попробуйте «Очистить кэш ИИ» в «Настройках» и повторите.',
+            'warn',
           );
           return;
         }
@@ -681,7 +683,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
         }
         autoDedupe(`Шаг 3 «Поиск в интернете»: добавлено позиций ${result.length}.`);
       } catch (e) {
-        setAiErr('Ошибка ИИ: ' + (e instanceof Error ? e.message : String(e)));
+        announce('Ошибка ИИ: ' + (e instanceof Error ? e.message : String(e)), 'error');
       } finally {
         setAiBusy(false);
       }
@@ -1118,15 +1120,12 @@ export function ModelCard({ modelId }: { modelId: string }) {
         </div>
         {ops.length > 0 && (
           <datalist id={`ops-${modelId}`}>
-            {/* Заказчик 14.05: «по стрелке открывается список, что в него попадает?
-                сейчас некорректный выбор предлагает». Сортируем: стандартные сначала,
-                далее по алфавиту; ограничиваем 50, чтобы браузер не предлагал мусор. */}
+            {/* Операции: стандартные сначала, далее по алфавиту. Все показываются. */}
             {[...ops]
               .sort((a, b) => {
                 if (!!b.standard !== !!a.standard) return b.standard ? 1 : -1;
                 return a.name.localeCompare(b.name, 'ru');
               })
-              .slice(0, 50)
               .map((o, i) => (
                 <option key={i} value={o.name}>
                   {o.standard ? '★ стандарт' : ''}
@@ -1168,7 +1167,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
           );
         })()}
         <details className="muted small" style={{ marginTop: 6 }}>
-          <summary>Правила нормализации (созвон 28.04.2026)</summary>
+          <summary>Правила нормализации</summary>
           <ul style={{ margin: '4px 0 0 16px' }}>
             <li>В Элемент/Подэлемент <strong>не вносим</strong> крепёж: гайки, шайбы, винты, шпильки, хомуты, болты, штифты, шпонки.</li>
             <li>Если в строке несколько слов — первое всегда <strong>существительное</strong>.</li>
@@ -1788,8 +1787,22 @@ export function ModelCard({ modelId }: { modelId: string }) {
 
   function PropsTab({ modelId }: { modelId: string }) {
     const m = useStore((s) => s.models.find((x) => x.id === modelId));
+    const hierarchy = useStore((s) => s.hierarchy);
     const acceptProposal = useStore((s) => s.acceptProposal);
     if (!m) return null;
+
+    // Build hierarchy context for classification
+    const getNodePath = (node: HierarchyNode, targetNodeId: string, path: string[] = []): string[] | null => {
+      const curPath = [...path, node.name || ''];
+      if (node.modelIds?.includes(modelId)) return curPath;
+      for (const c of node.children) {
+        const found = getNodePath(c, targetNodeId, curPath);
+        if (found) return found;
+      }
+      return null;
+    };
+    const hierarchyContext = (getNodePath(hierarchy, m.nodeId) || []).join(' ');
+
     const classes = classifier.classes.map((c) => c.name);
     const cur = classifier.classes.find((c) => c.name === m.className);
     const subclasses = cur ? cur.subclasses.map((s) => s.name) : [];
@@ -1896,7 +1909,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
         <div className="grid2-full row-flex" style={{ gap: 8 }}>
           <button
             onClick={() => {
-              const r = classifyModel(m, classifier);
+              const r = classifyModel(m, classifier, hierarchyContext);
               if (r.matched) {
                 update(m.id, {
                   className: r.className,
@@ -1910,9 +1923,12 @@ export function ModelCard({ modelId }: { modelId: string }) {
                   classificationProposals: r.proposals,
                   classificationConfidence: r.confidence,
                 });
+                if (!r.proposals.length) {
+                  alert('Не удалось подобрать класс по классификатору. Попробуйте «Спросить ИИ» или выберите вручную.');
+                }
               }
             }}
-            title="Подобрать класс/подкласс по классификатору"
+            title="Подобрать класс/подкласс по классификатору (ключевые слова + иерархия)"
           >
             Подобрать
           </button>
@@ -2282,10 +2298,20 @@ export function ModelCard({ modelId }: { modelId: string }) {
 
     const extractFromDocs = () => {
       const docs = m.documents ?? [];
+      if (!docs.some((d) => d.parsedText)) {
+        alert('Нет распознанного текста. Загрузите документ во вкладке «Документы».');
+        return;
+      }
       const fresh: Characteristic[] = [];
       for (const d of docs) {
         if (!d.parsedText) continue;
         fresh.push(...parseCharacteristics(d.parsedText, cls, sub, d.id));
+      }
+      if (fresh.length === 0) {
+        alert(
+          'Из документов не удалось извлечь характеристики в формате «ключ: значение». Проверьте текст документа или попробуйте «Извлечь через ИИ».',
+        );
+        return;
       }
       // Сохраняем зафиксированные экспертом значения, остальные — заменяем извлечёнными.
       const locked = (m.characteristics ?? []).filter((c) => c.lockedByExpert);
@@ -2355,6 +2381,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
             isPriority: true,
             priorityOrder: keys.findIndex((k) => k.key === x.key),
             source: 'web' as const,
+            confidence: (x as { confidence?: number }).confidence,
           }));
         setChars([...locked, ...keepManual, ...webChars]);
       } catch (e) {
@@ -2415,8 +2442,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
       if (!code) {
         alert('У модели нет кода — заполните «Код» во вкладке «Свойства».');
         return;
-      }
-      setDbBusy(true);
+      }      setDbBusy(true);
       try {
         const db = await loadModelsDb();
         const hit = lookupModel(db, m.rawCode, m.normalizedCode);
@@ -2601,7 +2627,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
                       (c.valueNum !== undefined ? fmtNum(c.valueNum) : '—')}
                   </td>
                   <td className="muted small">
-                    <SourceBadge source={c.source} />
+                    <SourceBadge source={c.source} confidence={c.confidence} />
                     <button
                       className="link-btn"
                       title="Окно с обоснованием (п.7.5 ТЗ): фрагмент документа, источник или правило, на основании которого заполнено поле."
@@ -2748,7 +2774,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
     type BomKey = string;
     const bomMap = new Map<
       BomKey,
-      { name: string; kind: 'material' | 'spare'; unit?: string; qty: number; refs: number }
+      { name: string; kind: 'material' | 'spare'; unit?: string; qty: number; refs: number; source?: string }
     >();
     for (const r of rows) {
       if (!r.tmcName || !r.tmcKind) continue;
@@ -2765,6 +2791,12 @@ export function ModelCard({ modelId }: { modelId: string }) {
           unit: r.tmcUnit,
           qty,
           refs: 1,
+          source: r.source === 'document' ? 'документ'
+            : r.source === 'web' ? 'интернет'
+            : r.source === 'analog' ? 'аналог'
+            : r.source === 'ai' ? 'ИИ'
+            : r.source === 'manual' ? 'вручную'
+            : r.source ?? undefined,
         });
       }
     }
@@ -2946,17 +2978,15 @@ export function ModelCard({ modelId }: { modelId: string }) {
             {busy === 'bom' ? '…' : 'BOM из интернета'}
           </button>
           <button
-            disabled={!hasKey || !!busy || acts.length === 0}
+            disabled={!m.className}
             title={
-              !hasKey
-                ? 'Укажите OpenAI ключ в «Настройках»'
-                : acts.length === 0
-                  ? 'Сначала добавьте ВВ во вкладке «ВВ»'
-                  : 'Дополнить APL типовыми запчастями из открытых источников (п.6.6 ТЗ)'
+              !m.className
+                ? 'Сначала классифицируйте модель'
+                : 'Построить APL из техкарт текущей модели и аналогов того же класса/подкласса (без интернета)'
             }
-            onClick={() => enrichFromWeb('apl')}
+            onClick={() => setAnalogsOpen('apl')}
           >
-            {busy === 'apl' ? '…' : 'APL из интернета'}
+            APL из аналогов
           </button>
           <button
             disabled={!m.className}
@@ -2996,6 +3026,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
               <th style={{ width: 80 }}>Ед.</th>
               <th style={{ width: 80 }}>Кол-во</th>
               <th style={{ width: 110 }}>В техкартах</th>
+              <th style={{ width: 90 }}>Источник</th>
             </tr>
           </thead>
           <tbody>
@@ -3006,6 +3037,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
                 <td>{x.unit ?? '—'}</td>
                 <td className="mono">{fmtQty(x.qty)}</td>
                 <td className="muted small">{x.refs}</td>
+                <td className="muted small">{x.source ?? '—'}</td>
               </tr>
             ))}
           </tbody>
@@ -3091,7 +3123,17 @@ export function ModelCard({ modelId }: { modelId: string }) {
             items={webSuggestions.items}
             actions={acts}
             onAccept={(picked) => {
+              // Deduplicate: check existing tech card for same TMC entries
+              const existing = new Set(
+                (m.techCard ?? [])
+                  .filter((r) => r.tmcName && r.tmcKind)
+                  .map((r) => `${(r.tmcName ?? '').trim().toLowerCase()}|${(r.tmcUnit ?? '').toLowerCase()}|${r.tmcKind}`),
+              );
+              let added = 0;
               for (const x of picked) {
+                const key = `${x.tmcName.trim().toLowerCase()}|${(x.tmcUnit ?? '').toLowerCase()}|${x.tmcKind}`;
+                if (existing.has(key)) continue; // skip duplicate
+                existing.add(key);
                 upsertTcRow(modelId, {
                   actionId: x.actionId,
                   tmcName: x.tmcName,
@@ -3100,8 +3142,14 @@ export function ModelCard({ modelId }: { modelId: string }) {
                   tmcQty: x.tmcQty,
                   source: 'web',
                 });
+                added++;
               }
               setWebSuggestions(null);
+              if (added < picked.length) {
+                announce(`Добавлено ${added} из ${picked.length} (${picked.length - added} дублей пропущено).`, 'ok');
+              } else {
+                announce(`Добавлено ${added} позиций.`, 'ok');
+              }
             }}
             onClose={() => setWebSuggestions(null)}
           />
@@ -3113,7 +3161,17 @@ export function ModelCard({ modelId }: { modelId: string }) {
             currentModel={m}
             allModels={allModels}
             onAccept={(picked) => {
+              // Deduplicate: check existing tech card for same TMC entries
+              const existing = new Set(
+                (m.techCard ?? [])
+                  .filter((r) => r.tmcName && r.tmcKind)
+                  .map((r) => `${(r.tmcName ?? '').trim().toLowerCase()}|${(r.tmcUnit ?? '').toLowerCase()}|${r.tmcKind}`),
+              );
+              let added = 0;
               for (const x of picked) {
+                const key = `${x.tmcName.trim().toLowerCase()}|${(x.tmcUnit ?? '').toLowerCase()}|${x.tmcKind}`;
+                if (existing.has(key)) continue;
+                existing.add(key);
                 upsertTcRow(modelId, {
                   actionId: x.actionId,
                   tmcName: x.tmcName,
@@ -3122,8 +3180,14 @@ export function ModelCard({ modelId }: { modelId: string }) {
                   tmcQty: x.tmcQty,
                   source: 'analog',
                 });
+                added++;
               }
               setAnalogsOpen(null);
+              if (added < picked.length) {
+                announce(`Скопировано ${added} из ${picked.length} (${picked.length - added} дублей пропущено).`, 'ok');
+              } else {
+                announce(`Скопировано ${added} позиций из аналогов.`, 'ok');
+              }
             }}
             onClose={() => setAnalogsOpen(null)}
           />

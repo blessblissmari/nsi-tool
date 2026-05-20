@@ -13,8 +13,8 @@ const TYPE_LABEL: Record<NodeType, string> = {
 };
 
 const CHILD_TYPES: Record<NodeType, NodeType[]> = {
-  enterprise: ['plant'],
-  plant: ['workshop', 'group'],
+  enterprise: ['plant', 'workshop', 'group'],
+  plant: ['workshop', 'site', 'group'],
   workshop: ['site', 'group'],
   site: ['group'],
   group: ['group'],
