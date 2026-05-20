@@ -1929,11 +1929,23 @@ export function ModelCard({ modelId }: { modelId: string }) {
             }
             onClick={async () => {
               try {
-                const docText = (m.documents ?? [])
-                  .map((d) => d.parsedText || '')
-                  .filter(Boolean)
-                  .join('\n')
-                  .slice(0, 4000);
+                // Get hierarchy path
+                const hierarchy = useStore.getState().hierarchy;
+                const collectPath = (node: any, targetId: string, path: string[]): string[] | null => {
+                  if (node.id === targetId) return [...path, node.name];
+                  for (const child of node.children || []) {
+                    const result = collectPath(child, targetId, [...path, node.name]);
+                    if (result) return result;
+                  }
+                  return null;
+                };
+                const pathNames = collectPath(hierarchy, m.nodeId, []);
+                const nodeContext = pathNames ? pathNames.filter(Boolean).join(' / ') : '';
+
+                const docText = [
+                  nodeContext ? `Расположение в иерархии: ${nodeContext}` : '',
+                  ...(m.documents ?? []).map((d) => d.parsedText || '').filter(Boolean),
+                ].filter(Boolean).join('\n').slice(0, 4000);
                 const proposals = await aiProvider().classify({
                   model: { rawCode: m.rawCode, normalizedCode: m.normalizedCode },
                   classes: classifier.classes,

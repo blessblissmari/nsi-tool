@@ -128,14 +128,30 @@ export function Toolbar() {
               let ok = 0;
               let fail = 0;
               setMsg(`${msg} · ИИ: 0 из ${need.length}…`);
+
+              // Get hierarchy path for model (e.g. "Северал / Цех ТЭЦ / Мастерская / Станки / Токарные")
+              const getNodePath = (nodeId: string): string => {
+                const h = state.hierarchy;
+                const collectPath = (node: any, targetId: string, path: string[]): string[] | null => {
+                  if (node.id === targetId) return [...path, node.name];
+                  for (const child of node.children || []) {
+                    const result = collectPath(child, targetId, [...path, node.name]);
+                    if (result) return result;
+                  }
+                  return null;
+                };
+                const pathNames = collectPath(h, nodeId, []);
+                return pathNames ? pathNames.filter(Boolean).join(' / ') : '';
+              };
+
               for (let i = 0; i < need.length; i++) {
                 const m = need[i];
                 try {
-                  const docText = (m.documents ?? [])
-                    .map((d) => d.parsedText || '')
-                    .filter(Boolean)
-                    .join('\n')
-                    .slice(0, 2000);
+                  const nodeContext = getNodePath(m.nodeId);
+                  const docText = [
+                    nodeContext ? `Расположение в иерархии: ${nodeContext}` : '',
+                    ...(m.documents ?? []).map((d) => d.parsedText || '').filter(Boolean),
+                  ].filter(Boolean).join('\n').slice(0, 2000);
                   const proposals = await aiProvider().classify({
                     model: { rawCode: m.rawCode, normalizedCode: m.normalizedCode },
                     classes,
