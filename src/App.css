@@ -781,9 +781,9 @@ table.models input.warn {
 /* Контейнер прокрутки техкарты: горизонтальная полоса всегда видна,
    независимо от высоты страницы (заказчик: «надо полосу прокрутки закрепить»). */
 .tc-scroll {
-  max-height: 70vh;
+  max-height: 60vh;
   overflow: auto;
-  border: 1px solid var(--bg-dim);
+  border: 1px solid var(--border, #ddd);
   border-radius: 4px;
   background: var(--bg);
 }

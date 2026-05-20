@@ -81,6 +81,12 @@ function findPriorityMatch(
 /** Разделители между ключом и значением: : — – = (после ключа). */
 const SEPARATORS = /[:\u2014\u2013=]\s*/;
 
+/** Tab-separated pattern: key followed by tab(s) then value. */
+const TAB_SEP = /^(.{3,50})\t+(.+)$/;
+
+/** Multi-space pattern: key followed by 3+ spaces then value. */
+const MULTI_SPACE_SEP = /^(.{3,50})\s{3,}(.+)$/;
+
 /**
  * Разбирает текст на пары «ключ: значение» с привязкой к приоритетным
  * характеристикам.
@@ -102,12 +108,39 @@ export function parseCharacteristics(
     .filter(Boolean);
 
   for (const line of lines) {
+    // Skip lines longer than 150 characters (likely paragraphs, not characteristics)
+    if (line.length > 150) continue;
+
+    let rawKey: string | undefined;
+    let rawVal: string | undefined;
+
+    // Try standard separator first (: — – =)
     const m = SEPARATORS.exec(line);
-    if (!m || m.index === 0) continue;
-    const rawKey = line.slice(0, m.index).trim();
-    const rawVal = line.slice(m.index + m[0].length).trim();
+    if (m && m.index > 0) {
+      rawKey = line.slice(0, m.index).trim();
+      rawVal = line.slice(m.index + m[0].length).trim();
+    } else {
+      // Try tab-separated pattern
+      const tabMatch = TAB_SEP.exec(line);
+      if (tabMatch) {
+        rawKey = tabMatch[1].trim();
+        rawVal = tabMatch[2].trim();
+      } else {
+        // Try multi-space pattern
+        const spaceMatch = MULTI_SPACE_SEP.exec(line);
+        if (spaceMatch) {
+          rawKey = spaceMatch[1].trim();
+          rawVal = spaceMatch[2].trim();
+        }
+      }
+    }
+
     if (!rawKey || !rawVal) continue;
     if (rawKey.length > 80) continue;
+    // Filter out keys with too many words (> 5 words likely not a characteristic key)
+    const keyWords = rawKey.split(/\s+/).filter(Boolean);
+    if (keyWords.length > 5) continue;
+
     const pv = parseValue(rawVal);
     const matched = findPriorityMatch(rawKey, priority);
     const keyDisplay = matched?.key ?? rawKey;

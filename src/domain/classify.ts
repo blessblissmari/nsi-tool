@@ -31,8 +31,10 @@ export interface ClassificationResult {
 export function classifyModel(
   model: Pick<EquipmentModel, 'rawCode' | 'normalizedCode'>,
   classifier: Classifier,
+  nodeContext?: string,  // node hierarchy names like "Станки / Токарные"
 ): ClassificationResult {
   const code = (model.normalizedCode || model.rawCode || '').toUpperCase();
+  const searchText = nodeContext ? (code + ' ' + nodeContext.toUpperCase()) : code;
   if (!code) {
     return {
       matched: false,
@@ -53,10 +55,10 @@ export function classifyModel(
   const proposals: ClassificationProposal[] = [];
   for (const cls of classifier.classes) {
     for (const sub of cls.subclasses) {
-      collectProposals(code, cls, sub, proposals);
+      collectProposals(searchText, cls, sub, proposals);
     }
     // Класс без подкласса (или общие keywords у класса)
-    collectProposals(code, cls, undefined, proposals);
+    collectProposals(searchText, cls, undefined, proposals);
   }
 
   // Удаляем дубли — оставляем один с лучшей уверенностью.
