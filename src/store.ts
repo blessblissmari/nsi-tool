@@ -284,7 +284,7 @@ export const useStore = create<Store>()(
     return { done };
   },
   classifyByClassifier(scope) {
-    const { classifier } = get();
+    const { classifier, hierarchy } = get();
     let matched = 0;
     let suggested = 0;
     const next = get().models.map((m) => {
@@ -297,7 +297,23 @@ export const useStore = create<Store>()(
       ) {
         return m;
       }
-      const r = classifyModel(m, classifier);
+      // Collect node hierarchy names as context for classification
+      let nodeContext: string | undefined;
+      if (m.nodeId) {
+        const collectParentNames = (node: import('./domain/types').HierarchyNode, targetId: string, path: string[]): string[] | null => {
+          if (node.id === targetId) return [...path, node.name];
+          for (const child of node.children) {
+            const result = collectParentNames(child, targetId, [...path, node.name]);
+            if (result) return result;
+          }
+          return null;
+        };
+        const pathNames = collectParentNames(hierarchy, m.nodeId, []);
+        if (pathNames && pathNames.length > 0) {
+          nodeContext = pathNames.filter(Boolean).join(' / ');
+        }
+      }
+      const r = classifyModel(m, classifier, nodeContext);
       if (r.matched) {
         matched++;
         return {
@@ -594,14 +610,11 @@ export const useStore = create<Store>()(
       const out: import('./domain/types').TechCardRow[] = [];
       for (const r of list) {
         const key = [
-          r.isAggregate ? 'AGG' : (r.component ?? '').trim().toLowerCase(),
-          (r.subcomponent ?? '').trim().toLowerCase(),
-          (r.operation ?? '').trim().toLowerCase(),
-          (r.specialty ?? '').trim().toLowerCase(),
-          (r.qualification ?? '').trim().toLowerCase(),
-          (r.tmcName ?? '').trim().toLowerCase(),
-          (r.tmcUnit ?? '').trim().toLowerCase(),
-          (r.actionId ?? '').trim().toLowerCase(),
+          r.isAggregate ? 'AGG' : (r.component ?? '').trim().toLowerCase().replace(/\s+/g, ' '),
+          (r.subcomponent ?? '').trim().toLowerCase().replace(/\s+/g, ' '),
+          (r.operation ?? '').trim().toLowerCase().replace(/\s+/g, ' '),
+          (r.specialty ?? '').trim().toLowerCase().replace(/\s+/g, ' '),
+          // Remove qualification and tmcName from dedup key to catch more dupes
         ].join('|');
         // Пустые строки (без операции и без ТМЦ) не дедупируем — это поля в процессе.
         const isEmpty =
