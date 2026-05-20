@@ -81,9 +81,15 @@ function findPriorityMatch(
 /** Разделители между ключом и значением: : — – = (после ключа). */
 const SEPARATORS = /[:\u2014\u2013=]\s*/;
 
+/** Extended separators for table-like documents: also match multiple spaces and tabs. */
+const TABLE_SEPARATORS = /(?:[:\u2014\u2013=]|\t|\s{3,})\s*/;
+
 /**
  * Разбирает текст на пары «ключ: значение» с привязкой к приоритетным
- * характеристикам.
+ * характеристикам. Supports:
+ * - Standard «ключ: значение» and «ключ = значение» formats
+ * - Table-like formats with tabs or multiple spaces
+ * - Lines where the key is a known priority characteristic name
  */
 export function parseCharacteristics(
   text: string,
@@ -94,6 +100,7 @@ export function parseCharacteristics(
   if (!text.trim()) return [];
   const priority = getPriority(cls, sub);
   const out: Characteristic[] = [];
+  const seenKeys = new Set<string>();
   // Делим на строки. Также допускаем «ключ: значение; ключ: значение» в одной строке.
   const lines = text
     .split(/[\r\n]+/)
@@ -102,16 +109,69 @@ export function parseCharacteristics(
     .filter(Boolean);
 
   for (const line of lines) {
+    // Skip overly long lines (likely paragraphs, not key-value pairs)
+    if (line.length > 200) continue;
+    // Skip lines that look like headers or titles (all caps, no separator)
+    if (/^[A-ZА-ЯЁ\s.]{5,}$/.test(line) && !SEPARATORS.test(line)) continue;
+
+    let rawKey: string | undefined;
+    let rawVal: string | undefined;
+
+    // Try standard separators first
     const m = SEPARATORS.exec(line);
-    if (!m || m.index === 0) continue;
-    const rawKey = line.slice(0, m.index).trim();
-    const rawVal = line.slice(m.index + m[0].length).trim();
+    if (m && m.index > 0 && m.index < 80) {
+      rawKey = line.slice(0, m.index).trim();
+      rawVal = line.slice(m.index + m[0].length).trim();
+    }
+
+    // If no standard match, try table-like separators
+    if (!rawKey || !rawVal) {
+      const mt = TABLE_SEPARATORS.exec(line);
+      if (mt && mt.index > 0 && mt.index < 80) {
+        rawKey = line.slice(0, mt.index).trim();
+        rawVal = line.slice(mt.index + mt[0].length).trim();
+      }
+    }
+
+    // If still nothing, check if the line starts with a known priority characteristic
+    if (!rawKey || !rawVal) {
+      for (const p of priority) {
+        const candidates = [p.key, ...(p.aliases ?? [])];
+        for (const c of candidates) {
+          const lc = line.toLowerCase();
+          const cc = c.toLowerCase();
+          if (lc.startsWith(cc) && line.length > c.length + 1) {
+            const rest = line.slice(c.length).trim();
+            // Strip leading separator if present
+            const cleaned = rest.replace(/^[:\u2014\u2013=\s]+/, '').trim();
+            if (cleaned && cleaned.length < 100) {
+              rawKey = c;
+              rawVal = cleaned;
+              break;
+            }
+          }
+        }
+        if (rawKey) break;
+      }
+    }
+
     if (!rawKey || !rawVal) continue;
     if (rawKey.length > 80) continue;
+    // Filter out non-characteristic content (random text)
+    // Skip if value looks like a sentence (too many words, no numbers for numeric chars)
+    const wordCount = rawVal.split(/\s+/).length;
+    if (wordCount > 8) continue; // Likely descriptive text, not a characteristic value
+
     const pv = parseValue(rawVal);
     const matched = findPriorityMatch(rawKey, priority);
     const keyDisplay = matched?.key ?? rawKey;
     const order = matched ? priority.findIndex((p) => p.key === matched.key) : undefined;
+    
+    // Deduplicate: skip if we already have this key
+    const normKey = norm(keyDisplay);
+    if (seenKeys.has(normKey)) continue;
+    seenKeys.add(normKey);
+
     out.push({
       id: newId(),
       key: keyDisplay,

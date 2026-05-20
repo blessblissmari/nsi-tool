@@ -284,7 +284,18 @@ export const useStore = create<Store>()(
     return { done };
   },
   classifyByClassifier(scope) {
-    const { classifier } = get();
+    const { classifier, hierarchy } = get();
+    // Build a map of model id → hierarchy path text (for context-based classification)
+    const modelContext = new Map<string, string>();
+    const buildContext = (node: HierarchyNode, path: string[]) => {
+      const curPath = [...path, node.name || ''];
+      for (const mid of node.modelIds ?? []) {
+        modelContext.set(mid, curPath.join(' '));
+      }
+      for (const c of node.children) buildContext(c, curPath);
+    };
+    buildContext(hierarchy, []);
+
     let matched = 0;
     let suggested = 0;
     const next = get().models.map((m) => {
@@ -297,7 +308,8 @@ export const useStore = create<Store>()(
       ) {
         return m;
       }
-      const r = classifyModel(m, classifier);
+      const ctx = modelContext.get(m.id) || '';
+      const r = classifyModel(m, classifier, ctx);
       if (r.matched) {
         matched++;
         return {
