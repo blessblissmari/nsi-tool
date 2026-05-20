@@ -783,35 +783,11 @@ export function ModelCard({ modelId }: { modelId: string }) {
             )}
           </span>
         </div>
-        {(() => {
-          // Подсказка «следующий шаг» — заказчик (14.05): «состав получил, операции получил,
-          //  дальше что?». Подсказываем, что делать дальше.
-          const hasComp = rows.some((r) => r.component || r.isAggregate);
-          const hasOp = rows.some((r) => r.operation);
-          const hasAction = rows.some((r) => r.actionId);
-          const hasSpec = rows.some((r) => r.specialty);
-          const hasLabor = rows.some((r) => r.laborHours || r.totalLaborHours);
-          const hasTmc = rows.some((r) => r.tmcName);
-          let next: string;
-          if (!hasComp) next = 'Начните с «1. Состав» или добавьте строки вручную.';
-          else if (!hasOp) next = 'Следующий шаг: «2. Операции».';
-          else if (!hasAction) next = 'Следующий шаг: укажите ВВ в колонке «ВВ» (или добавьте во вкладке «ВВ»).';
-          else if (!hasSpec) next = 'Следующий шаг: укажите Профессию/Разряд.';
-          else if (!hasLabor) next = 'Следующий шаг: расставьте Трудозатраты (ч на профессию).';
-          else if (!hasTmc) next = 'Следующий шаг: выпишите ТМЦ (наименование + ед.изм. + кол-во).';
-          else next = 'Порядок выполнен. Добавьте остальные строки или перейдите на вкладку «Спецификации».';
-          return (
-            <div className={`status-banner status-${status?.tone ?? 'info'}`}>
-              <span className="status-next">{next}</span>
-              {status?.text && (
-                <>
-                  <span className="muted" style={{ margin: '0 6px' }}>·</span>
-                  <span>{status.text}</span>
-                </>
-              )}
-            </div>
-          );
-        })()}
+        {status && (
+          <div className={`status-banner status-${status.tone}`}>
+            {status.text}
+          </div>
+        )}
         {/* Прокрутка таблицы ограничена по высоте + свой скролл — горизонтальная
             полоса прокрутки всегда в видимой области (сообщение заказчика 14.05). */}
         <div
