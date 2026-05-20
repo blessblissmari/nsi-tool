@@ -107,95 +107,67 @@ export function Toolbar() {
         Нормализовать
       </button>
       <button
-        onClick={() => {
-          const cls = useStore.getState().classifier;
-          const hasRules = cls.classes.some((c) =>
-            (c.keywords?.length ?? 0) > 0 ||
-            c.subclasses.some(
-              (s) => (s.keywords?.length ?? 0) > 0 || (s.patterns?.length ?? 0) > 0,
-            ),
-          );
+        title="Классифицировать все модели: сначала по классификатору (keywords/regex), затем через ИИ для оставшихся."
+        onClick={async () => {
+          // Step 1: classify by classifier (keywords/regex)
           const r = classifyByClassifier();
-          let m = `Классифицировано: ${r.matched} из ${r.total}`;
-          if (r.suggested) m += `, подсказок: ${r.suggested}`;
-          if (!hasRules && r.matched === 0) {
-            m +=
-              '. В классификаторе нет ключевых слов/regex. Загрузите файл «Классификация моделей.xlsx» (Класс/Подкласс/Модель) или дождитесь модуля ИИ.';
+          let msg = `Классификатор: ${r.matched} из ${r.total}`;
+
+          // Step 2: AI for remaining unclassified (if API key available)
+          if (getApiKey()) {
+            const state = useStore.getState();
+            const update = state.updateModel;
+            const classes = state.classifier.classes;
+            const need = state.models.filter(
+              (m) =>
+                m.classificationSource !== 'classifier' &&
+                m.classificationSource !== 'manual' &&
+                !m.className,
+            );
+            if (need.length > 0 && classes.length > 0) {
+              let ok = 0;
+              let fail = 0;
+              setMsg(`${msg} · ИИ: 0 из ${need.length}…`);
+              for (let i = 0; i < need.length; i++) {
+                const m = need[i];
+                try {
+                  const docText = (m.documents ?? [])
+                    .map((d) => d.parsedText || '')
+                    .filter(Boolean)
+                    .join('\n')
+                    .slice(0, 2000);
+                  const proposals = await aiProvider().classify({
+                    model: { rawCode: m.rawCode, normalizedCode: m.normalizedCode },
+                    classes,
+                    docText,
+                  });
+                  if (proposals.length) {
+                    const top = proposals[0];
+                    update(m.id, {
+                      className: top.className,
+                      subclassName: top.subclassName,
+                      classificationSource: 'ai',
+                      classificationConfidence: top.confidence,
+                      classificationProposals: proposals,
+                    });
+                    ok++;
+                  } else {
+                    fail++;
+                  }
+                } catch {
+                  fail++;
+                }
+                setMsg(`${msg} · ИИ: ${i + 1}/${need.length} (ок: ${ok})`);
+              }
+              msg += ` · ИИ: ${ok} из ${need.length}`;
+              if (fail) msg += `, без результата: ${fail}`;
+            }
           }
-          setMsg(m);
+
+          setMsg(msg);
         }}
-        title="Подобрать класс/подкласс по классификатору. Уверенные совпадения проставляются автоматически, остальные — как подсказки в карточке модели."
       >
         Классифицировать
-      </button>
-      <button
-        disabled={!getApiKey()}
-        title={
-          !getApiKey()
-            ? 'Подключите OpenAI ключ кнопкой «ИИ» в шапке'
-            : 'Спросить ИИ для всех моделей без класса (использует кэш — повторный клик бесплатен).'
-        }
-        onClick={async () => {
-          const state = useStore.getState();
-          const update = state.updateModel;
-          const classes = state.classifier.classes;
-          if (!classes.length) {
-            setMsg('Сначала загрузите классификатор.');
-            return;
-          }
-          const need = state.models.filter(
-            (m) =>
-              m.classificationSource !== 'classifier' &&
-              m.classificationSource !== 'manual' &&
-              !m.className,
-          );
-          if (!need.length) {
-            setMsg('Нет моделей без класса — все уже классифицированы.');
-            return;
-          }
-          let ok = 0;
-          let fail = 0;
-          setMsg(`ИИ: 0 из ${need.length}…`);
-          for (let i = 0; i < need.length; i++) {
-            const m = need[i];
-            try {
-              const docText = (m.documents ?? [])
-                .map((d) => d.parsedText || '')
-                .filter(Boolean)
-                .join('\n')
-                .slice(0, 2000);
-              const proposals = await aiProvider().classify({
-                model: { rawCode: m.rawCode, normalizedCode: m.normalizedCode },
-                classes,
-                docText,
-              });
-              if (proposals.length) {
-                const top = proposals[0];
-                update(m.id, {
-                  className: top.className,
-                  subclassName: top.subclassName,
-                  classificationSource: 'ai',
-                  classificationConfidence: top.confidence,
-                  classificationProposals: proposals,
-                });
-                ok++;
-              } else {
-                fail++;
-              }
-            } catch {
-              fail++;
-            }
-            setMsg(
-              `ИИ: ${i + 1} из ${need.length} (применено: ${ok}, без результата: ${fail})`,
-            );
-          }
-          setMsg(
-            `ИИ: классифицировано ${ok} из ${need.length}` +
-              (fail ? `, без результата: ${fail}` : ''),
-          );
-        }}
-      >
-        Классифицировать ИИ
       </button>
 
       <button
