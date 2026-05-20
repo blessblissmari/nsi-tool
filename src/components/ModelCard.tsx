@@ -2073,6 +2073,17 @@ export function ModelCard({ modelId }: { modelId: string }) {
         const newDocs: DocumentRef[] = [];
         for (const f of Array.from(files)) {
           const r = await extractTextFromFile(f);
+          // Сохраняем PDF в base64 для прямой отправки в AI API (vision)
+          let pdfBase64: string | undefined;
+          if (f.name.toLowerCase().endsWith('.pdf')) {
+            const buf = await f.arrayBuffer();
+            const bytes = new Uint8Array(buf);
+            let binary = '';
+            for (let i = 0; i < bytes.length; i++) {
+              binary += String.fromCharCode(bytes[i]);
+            }
+            pdfBase64 = btoa(binary);
+          }
           newDocs.push({
             id: newId('d'),
             url: f.name,
@@ -2080,6 +2091,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
             filename: f.name,
             parsedText: r.text,
             parsedAt: new Date().toISOString(),
+            pdfBase64,
           });
         }
         update(m.id, { documents: [...docs, ...newDocs] });
@@ -2397,9 +2409,11 @@ export function ModelCard({ modelId }: { modelId: string }) {
         .map((d) => d.parsedText || '')
         .filter(Boolean)
         .join('\n\n');
-      if (!text.trim()) {
+      // Берём первый PDF base64 для прямой отправки в API
+      const pdfBase64 = docs.find((d) => d.pdfBase64)?.pdfBase64;
+      if (!text.trim() && !pdfBase64) {
         alert(
-          'Нет распознанного текста. Загрузите документ во вкладке «Документы».',
+          'Нет распознанного текста и нет PDF. Загрузите документ во вкладке «Документы».',
         );
         return;
       }
@@ -2414,6 +2428,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
         const items = await aiProvider().extractCharacteristics({
           text,
           keys,
+          pdfBase64,
         });
         if (!items.length) {
           alert('ИИ не нашёл значений в документе.');

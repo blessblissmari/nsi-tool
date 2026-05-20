@@ -1,6 +1,5 @@
 /**
  * Реализация AiProvider поверх OpenAI Chat Completions API.
- * Модель: gpt-4o-mini ($0.150 / 1M входных токенов, $0.600 / 1M выходных).
  *
  * Экономия:
  *  - Кэширование результатов в localStorage по содержательному ключу,
@@ -9,6 +8,8 @@
  *  - Жёсткое ограничение `max_tokens` под задачу.
  *  - Учёт фактического `usage.{prompt_tokens, completion_tokens}` —
  *    счётчик расхода в долларах виден в шапке UI.
+ *  - PDF-файлы отправляются напрямую в API через base64 (vision),
+ *    без предварительного извлечения текста.
  */
 import type {
   ActionItem,
@@ -24,22 +25,101 @@ import {
   techCardFewShot,
 } from '../data/realBomAndTechCards';
 
-/**
- * Основная модель — дешёвая. Используется для классификации, подбора
- * ВВ, извлечения характеристик. Выдаёт нормальный результат на типовых
- * задачах, но на «творческих» (техкарты, BOM) склонна придумывать.
- */
-const MODEL_FAST = 'gpt-4o-mini';
-/**
- * Большая модель — для задач, где важна достоверность (техкарты по
- * шаблону, типовой BOM/APL из интернета). В ≈16× дороже по выходу,
- * но содержательно пишет так, как в реальных паспортах.
- */
-const MODEL_QUALITY = 'gpt-4o';
-const PRICE_FAST_PROMPT = 0.15; // USD / 1M
-const PRICE_FAST_COMPLETION = 0.6;
-const PRICE_QUALITY_PROMPT = 2.5;
-const PRICE_QUALITY_COMPLETION = 10.0;
+/* ═══════════════════════════════════════════════════════════════════════
+ * КОНФИГУРАЦИЯ МОДЕЛЕЙ — пользователь выбирает в настройках
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+export interface ModelOption {
+  id: string;
+  label: string;
+  /** Описание для tooltip */
+  description: string;
+  /** Модель для простых задач (классификация, извлечение характеристик) */
+  fast: string;
+  /** Модель для сложных задач (техкарты, BOM, состав) */
+  quality: string;
+  /** Цена input / 1M токенов для fast */
+  priceFastIn: number;
+  /** Цена output / 1M токенов для fast */
+  priceFastOut: number;
+  /** Цена input / 1M токенов для quality */
+  priceQualityIn: number;
+  /** Цена output / 1M токенов для quality */
+  priceQualityOut: number;
+  /** Поддерживает отправку PDF напрямую (vision) */
+  supportsPdfVision: boolean;
+}
+
+export const MODEL_OPTIONS: ModelOption[] = [
+  {
+    id: 'gpt5-mini',
+    label: 'GPT-5 mini (рекомендуется)',
+    description: '5-е поколение, дёшево и умно. $0.25/$2.00 за 1M токенов.',
+    fast: 'gpt-5-mini',
+    quality: 'gpt-5-mini',
+    priceFastIn: 0.25,
+    priceFastOut: 2.0,
+    priceQualityIn: 0.25,
+    priceQualityOut: 2.0,
+    supportsPdfVision: true,
+  },
+  {
+    id: 'gpt5-mixed',
+    label: 'GPT-5 mini + GPT-5.4 (максимум)',
+    description: 'Mini для простых задач, 5.4 для техкарт/BOM. Дороже, но точнее.',
+    fast: 'gpt-5-mini',
+    quality: 'gpt-5.4',
+    priceFastIn: 0.25,
+    priceFastOut: 2.0,
+    priceQualityIn: 2.5,
+    priceQualityOut: 15.0,
+    supportsPdfVision: true,
+  },
+  {
+    id: 'gpt41',
+    label: 'GPT-4.1 mini + GPT-4.1',
+    description: 'Предыдущее поколение, проверенное. $0.40/$1.60 + $2/$8.',
+    fast: 'gpt-4.1-mini',
+    quality: 'gpt-4.1',
+    priceFastIn: 0.4,
+    priceFastOut: 1.6,
+    priceQualityIn: 2.0,
+    priceQualityOut: 8.0,
+    supportsPdfVision: true,
+  },
+  {
+    id: 'gpt4o',
+    label: 'GPT-4o mini + GPT-4o (legacy)',
+    description: 'Старая модель. $0.15/$0.60 + $2.50/$10. Хуже качество.',
+    fast: 'gpt-4o-mini',
+    quality: 'gpt-4o',
+    priceFastIn: 0.15,
+    priceFastOut: 0.6,
+    priceQualityIn: 2.5,
+    priceQualityOut: 10.0,
+    supportsPdfVision: true,
+  },
+];
+
+const MODEL_CHOICE_STORAGE = 'nsi_model_choice';
+
+export function getModelChoice(): ModelOption {
+  try {
+    const id = localStorage.getItem(MODEL_CHOICE_STORAGE);
+    if (id) {
+      const found = MODEL_OPTIONS.find((m) => m.id === id);
+      if (found) return found;
+    }
+  } catch { /* ignore */ }
+  return MODEL_OPTIONS[0]; // default: gpt-5-mini
+}
+
+export function setModelChoice(id: string): ModelOption {
+  const opt = MODEL_OPTIONS.find((m) => m.id === id) ?? MODEL_OPTIONS[0];
+  localStorage.setItem(MODEL_CHOICE_STORAGE, opt.id);
+  window.dispatchEvent(new CustomEvent('nsi:model-changed', { detail: opt }));
+  return opt;
+}
 
 const KEY_STORAGE = 'nsi_openai_api_key';
 const USAGE_STORAGE = 'nsi_openai_usage';
@@ -122,8 +202,10 @@ async function callOpenAI<T>(
     bypassCache?: boolean;
     /** Если задано — не кэшировать, когда функция вернула «пусто». */
     isEmpty?: (value: unknown) => boolean;
-    /** Какую модель использовать. По умолчанию gpt-4o-mini. */
+    /** Какую модель использовать. По умолчанию fast. */
     model?: 'fast' | 'quality';
+    /** PDF в base64 для отправки напрямую в API (vision). */
+    pdfBase64?: string;
   },
 ): Promise<T | undefined> {
   const cache = readCache();
@@ -133,8 +215,26 @@ async function callOpenAI<T>(
   const key = getApiKey();
   if (!key) throw new Error('Не задан OpenAI API ключ. Settings → Ключ ИИ.');
 
+  const choice = getModelChoice();
   const useQuality = body.model === 'quality';
-  const modelName = useQuality ? MODEL_QUALITY : MODEL_FAST;
+  const modelName = useQuality ? choice.quality : choice.fast;
+
+  // Формируем messages — если есть PDF, отправляем через vision (base64)
+  const userContent: unknown[] = [{ type: 'text', text: body.user }];
+  if (body.pdfBase64 && choice.supportsPdfVision) {
+    userContent.push({
+      type: 'file',
+      file: {
+        filename: 'document.pdf',
+        file_data: `data:application/pdf;base64,${body.pdfBase64}`,
+      },
+    });
+  }
+
+  const messages = [
+    { role: 'system', content: body.system },
+    { role: 'user', content: userContent.length === 1 ? body.user : userContent },
+  ];
   const res = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -144,10 +244,7 @@ async function callOpenAI<T>(
     body: JSON.stringify({
       model: modelName,
       response_format: { type: 'json_object' },
-      messages: [
-        { role: 'system', content: body.system },
-        { role: 'user', content: body.user },
-      ],
+      messages,
       max_tokens: body.maxTokens,
       temperature: 0,
     }),
@@ -165,8 +262,8 @@ async function callOpenAI<T>(
   u.requests += 1;
   u.promptTokens += usage.prompt_tokens || 0;
   u.completionTokens += usage.completion_tokens || 0;
-  const pIn = useQuality ? PRICE_QUALITY_PROMPT : PRICE_FAST_PROMPT;
-  const pOut = useQuality ? PRICE_QUALITY_COMPLETION : PRICE_FAST_COMPLETION;
+  const pIn = useQuality ? choice.priceQualityIn : choice.priceFastIn;
+  const pOut = useQuality ? choice.priceQualityOut : choice.priceFastOut;
   u.costUsd +=
     ((usage.prompt_tokens || 0) * pIn +
       (usage.completion_tokens || 0) * pOut) /
@@ -255,24 +352,26 @@ ${docSnippet ? `Фрагмент документа:\n${docSnippet}` : ''}`;
   async extractCharacteristics(input: {
     text: string;
     keys: Array<{ key: string; unit?: string }>;
+    pdfBase64?: string;
   }): Promise<Array<Pick<Characteristic, 'key' | 'valueRaw' | 'unit'>>> {
     const text = input.text.slice(0, 6000);
-    const cacheKey = 'chars:' + fingerprint(input.keys, text);
+    const cacheKey = 'chars:' + fingerprint(input.keys, text, input.pdfBase64 ? 'pdf' : '');
     const system =
-      'Извлеки значения характеристик из текста паспорта/руководства оборудования. ' +
+      'Извлеки значения характеристик из текста/документа паспорта/руководства оборудования. ' +
       'Заполняй ТОЛЬКО запрошенные ключи (точные названия). ' +
       'Возвращай json {"items":[{"key":"...","valueRaw":"...","unit":"..."}]}. ' +
       'Если значения нет — не включай ключ. valueRaw — строка как в источнике, ' +
       'unit — единица как указана (например "кВт", "м3/мин"). ' +
-      'Числа сохраняй в исходном формате (запятая → точка не делай, парсер сам сделает).';
+      'Числа сохраняй в исходном формате (запятая → точка не делай, парсер сам сделает). ' +
+      'Если прикреплён PDF — извлекай данные напрямую из него (таблицы, текст, диаграммы).';
     const user = `Запрошенные ключи: ${JSON.stringify(input.keys)}
-Текст:
-${text}`;
+${text ? `Текст:\n${text}` : 'Данные — в прикреплённом PDF-файле.'}`;
     type Out = { items?: Array<{ key: string; valueRaw: string; unit?: string }> };
     const result = await callOpenAI<Out>(cacheKey, {
       system,
       user,
       maxTokens: 600,
+      pdfBase64: input.pdfBase64,
       isEmpty: (v) => {
         const items = (v as Out | undefined)?.items;
         return !items || items.length === 0;
