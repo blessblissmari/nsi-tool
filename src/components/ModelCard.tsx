@@ -13,7 +13,6 @@ import {
 } from '../domain/normalize';
 import { classifyModel } from '../domain/classify';
 import {
-  parseCharacteristics,
   sortCharacteristics,
   missingPriorityChars,
 } from '../domain/parseChars';
@@ -507,117 +506,6 @@ export function ModelCard({ modelId }: { modelId: string }) {
       announce(msg, warns.length ? 'warn' : 'ok');
       // После нормализации могли совпасть ключи у строк — проверяем дубли.
       autoDedupe();
-    };
-
-    /** Этап 3 ручного workflow: «Состав» (Элемент / Подэлемент). */
-    const fillElementsAi = async () => {
-      if (aiBusy) return;
-      if (!hasKey) {
-        setAiErr('Укажите OpenAI ключ в «Настройках».');
-        return;
-      }
-      setAiBusy(true);
-      setAiErr('');
-      try {
-        const docText = (m.documents ?? [])
-          .map((d) => d.parsedText ?? '')
-          .filter(Boolean)
-          .join('\n\n');
-        const result = await aiProvider().fillElementsAndSubelements({
-          model: {
-            className: m.className,
-            subclassName: m.subclassName,
-            normalizedCode: m.normalizedCode,
-            rawCode: m.rawCode,
-          },
-          docText: docText || undefined,
-        });
-        if (result.length === 0) {
-          setAiErr('ИИ не вернул состав. Очистите кэш ИИ и повторите.');
-          return;
-        }
-        for (const r of result) {
-          upsert(modelId, {
-            component: r.component,
-            subcomponent: r.subcomponent,
-            source: 'ai',
-          });
-        }
-        autoDedupe(`Шаг 1 «Состав»: добавлено позиций ${result.length}.`);
-      } catch (e) {
-        setAiErr('Ошибка ИИ: ' + (e instanceof Error ? e.message : String(e)));
-      } finally {
-        setAiBusy(false);
-      }
-    };
-
-    /** Этап 4 ручного workflow: «Операции» с правилами Демонтаж/Монтаж. */
-    const fillOperationsAi = async () => {
-      if (aiBusy) return;
-      if (!hasKey) {
-        setAiErr('Укажите OpenAI ключ в «Настройках».');
-        return;
-      }
-      // Берём уникальные пары элемент+подэлемент из существующих строк.
-      const existing = m.techCard ?? [];
-      const compsMap = new Map<string, { component: string; subcomponent?: string }>();
-      for (const r of existing) {
-        if (!r.component?.trim()) continue;
-        const k = `${r.component.trim()}|${(r.subcomponent ?? '').trim()}`;
-        if (!compsMap.has(k))
-          compsMap.set(k, {
-            component: r.component.trim(),
-            subcomponent: r.subcomponent?.trim() || undefined,
-          });
-      }
-      if (compsMap.size === 0) {
-        setAiErr('Сначала заполните состав (этап 3 — кнопка «🧩 Состав»).');
-        return;
-      }
-      setAiBusy(true);
-      setAiErr('');
-      try {
-        const docText = (m.documents ?? [])
-          .map((d) => d.parsedText ?? '')
-          .filter(Boolean)
-          .join('\n\n');
-        const result = await aiProvider().fillOperationsForElements({
-          model: {
-            className: m.className,
-            subclassName: m.subclassName,
-            normalizedCode: m.normalizedCode,
-            rawCode: m.rawCode,
-          },
-          components: Array.from(compsMap.values()),
-          operationsRef: ops.map((o) => o.name),
-          docText: docText || undefined,
-        });
-        if (result.length === 0) {
-          setAiErr('ИИ не вернул операции. Очистите кэш ИИ и повторите.');
-          return;
-        }
-        // Удаляем существующие пустые строки (component без operation),
-        // потом вставляем новые с операциями.
-        for (const r0 of existing) {
-          if (r0.component && !r0.operation) {
-            del(modelId, r0.id);
-          }
-        }
-        for (const r of result) {
-          upsert(modelId, {
-            component: r.component,
-            subcomponent: r.subcomponent,
-            operation: r.operation,
-            workDescription: r.workDescription,
-            source: 'ai',
-          });
-        }
-        autoDedupe(`Шаг 2 «Операции»: добавлено позиций ${result.length}.`);
-      } catch (e) {
-        setAiErr('Ошибка ИИ: ' + (e instanceof Error ? e.message : String(e)));
-      } finally {
-        setAiBusy(false);
-      }
     };
 
     const fillByAi = async () => {
@@ -2280,22 +2168,6 @@ export function ModelCard({ modelId }: { modelId: string }) {
         source: 'manual',
       };
       setChars([...(m.characteristics ?? []), next]);
-    };
-
-    const extractFromDocs = () => {
-      const docs = m.documents ?? [];
-      const fresh: Characteristic[] = [];
-      for (const d of docs) {
-        if (!d.parsedText) continue;
-        fresh.push(...parseCharacteristics(d.parsedText, cls, sub, d.id));
-      }
-      // Сохраняем зафиксированные экспертом значения, остальные — заменяем извлечёнными.
-      const locked = (m.characteristics ?? []).filter((c) => c.lockedByExpert);
-      const lockedKeys = new Set(locked.map((c) => c.key.toLowerCase()));
-      const filtered = fresh.filter(
-        (c) => !lockedKeys.has(c.key.toLowerCase()),
-      );
-      setChars([...locked, ...filtered]);
     };
 
     const buildPriorityKeys = (): Array<{ key: string; unit?: string }> => {
