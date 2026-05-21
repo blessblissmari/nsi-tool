@@ -32,6 +32,8 @@ export interface AiProvider {
     text: string;
     /** Список приоритетных характеристик класса/подкласса. */
     keys: Array<{ key: string; unit?: string }>;
+    /** PDF в base64 для прямой отправки в API (если есть). */
+    pdfBase64?: string;
   }): Promise<Array<Pick<Characteristic, 'key' | 'valueRaw' | 'unit'>>>;
 
   /** Подобрать ВВ (ТО/ремонт) для модели на основе аналогов и интернета. */

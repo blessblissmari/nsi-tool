@@ -5,7 +5,11 @@ import {
   resetUsage,
   setApiKey,
   readUsage,
+  getModelChoice,
+  setModelChoice,
+  MODEL_OPTIONS,
   type AiUsage,
+  type ModelOption,
 } from '../domain/openai';
 import {
   getUiSettings,
@@ -25,6 +29,7 @@ export function AiSettings({ onClose }: Props) {
   const [key, setKey] = useState(() => getApiKey() ?? '');
   const [usage, setUsage] = useState<AiUsage>(() => readUsage());
   const [revealed, setRevealed] = useState(false);
+  const [modelChoice, setModelChoiceState] = useState<ModelOption>(() => getModelChoice());
   const [ui, setUi] = useState<UiSettings>(() => getUiSettings());
   const rules = useStore((s) => s.rules);
   const setRules = useStore((s) => s.setRules);
@@ -123,7 +128,7 @@ export function AiSettings({ onClose }: Props) {
             ИИ (OpenAI)
           </div>
           <label className="muted small">
-            OpenAI API ключ (gpt-4o-mini). Хранится в localStorage браузера, на
+            OpenAI API ключ. Хранится в localStorage браузера, на
             сервер не уходит.
           </label>
           <div style={{ display: 'flex', gap: 6 }}>
@@ -200,10 +205,54 @@ export function AiSettings({ onClose }: Props) {
               очистить кэш
             </button>
           </div>
-          <div className="muted small">
-            Модель: <b>gpt-4o-mini</b> · $0.15 / 1M вход · $0.60 / 1M выход.
-            Все ответы кэшируются по содержимому запроса — повторный клик не
-            тратит токены.
+          <div className="muted small" style={{ fontWeight: 600, marginTop: 4 }}>
+            Модель ИИ
+          </div>
+          <select
+            value={modelChoice.id}
+            onChange={(e) => {
+              const opt = setModelChoice(e.target.value);
+              setModelChoiceState(opt);
+            }}
+            style={{ maxWidth: 360 }}
+          >
+            {MODEL_OPTIONS.map((opt) => (
+              <option key={opt.id} value={opt.id}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+          <div className="muted small" style={{ marginTop: 2 }}>
+            {modelChoice.description}
+          </div>
+          <table className="models" style={{ marginTop: 4, fontSize: '0.8em' }}>
+            <thead>
+              <tr>
+                <th></th>
+                <th>Модель</th>
+                <th>Input $/1M</th>
+                <th>Output $/1M</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Простые задачи</td>
+                <td className="mono">{modelChoice.fast}</td>
+                <td className="mono">${modelChoice.priceFastIn}</td>
+                <td className="mono">${modelChoice.priceFastOut}</td>
+              </tr>
+              <tr>
+                <td>Сложные задачи</td>
+                <td className="mono">{modelChoice.quality}</td>
+                <td className="mono">${modelChoice.priceQualityIn}</td>
+                <td className="mono">${modelChoice.priceQualityOut}</td>
+              </tr>
+            </tbody>
+          </table>
+          <div className="muted small" style={{ marginTop: 4 }}>
+            PDF-файлы отправляются напрямую в API (vision) — модель сама
+            читает документ, включая таблицы и диаграммы. Все ответы кэшируются —
+            повторный клик не тратит токены.
           </div>
 
           <hr />
