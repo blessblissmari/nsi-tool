@@ -2,7 +2,7 @@ name: Deploy to GitHub Pages
 
 on:
   push:
-    branches: ['devin/initial', 'fix/multiple-bugs', 'fix/deploy-enable-pages']
+    branches: ['devin/initial', 'fix/multiple-bugs']
   workflow_dispatch:
 
 permissions:
