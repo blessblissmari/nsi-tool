@@ -1817,14 +1817,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
                     : m.classificationSource === 'unresolved'
                       ? 'не определён'
                       : '—') +
-              // Процент показываем только для эвристик и ИИ — для прямой привязки
-              // и ручного выбора процент не имеет смысла (это всегда 100%).
-              (m.classificationConfidence !== undefined &&
-              m.classificationConfidence < 1 &&
-              m.classificationSource !== 'manual' &&
-              m.classificationSource !== 'unresolved'
-                ? ` · ${Math.round((m.classificationConfidence ?? 0) * 100)}%`
-                : '')
+              ''
             }
             readOnly
           />
@@ -2496,24 +2489,15 @@ export function ModelCard({ modelId }: { modelId: string }) {
             {dbBusy ? '⏳ Загрузка базы…' : '📚 Из базы моделей'}
           </button>
           <button
-            onClick={extractFromDocs}
-            disabled={!(m.documents ?? []).some((d) => d.parsedText)}
-            title="Парсить характеристики из распознанного текста документов"
-          >
-            Извлечь из документов
-          </button>
-          <button
             onClick={aiExtract}
-            disabled={
-              !getApiKey() || !(m.documents ?? []).some((d) => d.parsedText)
-            }
+            disabled={!getApiKey()}
             title={
               !getApiKey()
-                ? 'Подключите OpenAI ключ в кнопке «ИИ» в шапке'
-                : 'Извлечь характеристики через ИИ — фоллбек, если парсер пуст'
+                ? 'Подключите OpenAI ключ в «Настройках»'
+                : 'Извлечь характеристики через ИИ из загруженных документов (PDF отправляется напрямую)'
             }
           >
-            Извлечь через ИИ
+            Извлечь характеристики
           </button>
           <button
             onClick={enrichFromWeb}
