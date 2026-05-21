@@ -13,7 +13,6 @@ import {
 } from '../domain/normalize';
 import { classifyModel } from '../domain/classify';
 import {
-  parseCharacteristics,
   sortCharacteristics,
   missingPriorityChars,
 } from '../domain/parseChars';
@@ -509,117 +508,6 @@ export function ModelCard({ modelId }: { modelId: string }) {
       autoDedupe();
     };
 
-    /** Этап 3 ручного workflow: «Состав» (Элемент / Подэлемент). */
-    const fillElementsAi = async () => {
-      if (aiBusy) return;
-      if (!hasKey) {
-        setAiErr('Укажите OpenAI ключ в «Настройках».');
-        return;
-      }
-      setAiBusy(true);
-      setAiErr('');
-      try {
-        const docText = (m.documents ?? [])
-          .map((d) => d.parsedText ?? '')
-          .filter(Boolean)
-          .join('\n\n');
-        const result = await aiProvider().fillElementsAndSubelements({
-          model: {
-            className: m.className,
-            subclassName: m.subclassName,
-            normalizedCode: m.normalizedCode,
-            rawCode: m.rawCode,
-          },
-          docText: docText || undefined,
-        });
-        if (result.length === 0) {
-          setAiErr('ИИ не вернул состав. Очистите кэш ИИ и повторите.');
-          return;
-        }
-        for (const r of result) {
-          upsert(modelId, {
-            component: r.component,
-            subcomponent: r.subcomponent,
-            source: 'ai',
-          });
-        }
-        autoDedupe(`Шаг 1 «Состав»: добавлено позиций ${result.length}.`);
-      } catch (e) {
-        setAiErr('Ошибка ИИ: ' + (e instanceof Error ? e.message : String(e)));
-      } finally {
-        setAiBusy(false);
-      }
-    };
-
-    /** Этап 4 ручного workflow: «Операции» с правилами Демонтаж/Монтаж. */
-    const fillOperationsAi = async () => {
-      if (aiBusy) return;
-      if (!hasKey) {
-        setAiErr('Укажите OpenAI ключ в «Настройках».');
-        return;
-      }
-      // Берём уникальные пары элемент+подэлемент из существующих строк.
-      const existing = m.techCard ?? [];
-      const compsMap = new Map<string, { component: string; subcomponent?: string }>();
-      for (const r of existing) {
-        if (!r.component?.trim()) continue;
-        const k = `${r.component.trim()}|${(r.subcomponent ?? '').trim()}`;
-        if (!compsMap.has(k))
-          compsMap.set(k, {
-            component: r.component.trim(),
-            subcomponent: r.subcomponent?.trim() || undefined,
-          });
-      }
-      if (compsMap.size === 0) {
-        setAiErr('Сначала заполните состав (этап 3 — кнопка «🧩 Состав»).');
-        return;
-      }
-      setAiBusy(true);
-      setAiErr('');
-      try {
-        const docText = (m.documents ?? [])
-          .map((d) => d.parsedText ?? '')
-          .filter(Boolean)
-          .join('\n\n');
-        const result = await aiProvider().fillOperationsForElements({
-          model: {
-            className: m.className,
-            subclassName: m.subclassName,
-            normalizedCode: m.normalizedCode,
-            rawCode: m.rawCode,
-          },
-          components: Array.from(compsMap.values()),
-          operationsRef: ops.map((o) => o.name),
-          docText: docText || undefined,
-        });
-        if (result.length === 0) {
-          setAiErr('ИИ не вернул операции. Очистите кэш ИИ и повторите.');
-          return;
-        }
-        // Удаляем существующие пустые строки (component без operation),
-        // потом вставляем новые с операциями.
-        for (const r0 of existing) {
-          if (r0.component && !r0.operation) {
-            del(modelId, r0.id);
-          }
-        }
-        for (const r of result) {
-          upsert(modelId, {
-            component: r.component,
-            subcomponent: r.subcomponent,
-            operation: r.operation,
-            workDescription: r.workDescription,
-            source: 'ai',
-          });
-        }
-        autoDedupe(`Шаг 2 «Операции»: добавлено позиций ${result.length}.`);
-      } catch (e) {
-        setAiErr('Ошибка ИИ: ' + (e instanceof Error ? e.message : String(e)));
-      } finally {
-        setAiBusy(false);
-      }
-    };
-
     const fillByAi = async () => {
       if (aiBusy) return;
       if (!hasKey) {
@@ -679,7 +567,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
             source: 'ai',
           });
         }
-        autoDedupe(`Шаг 3 «Поиск в интернете»: добавлено позиций ${result.length}.`);
+        autoDedupe(`Тех.карта заполнена: ${result.length} строк.`);
       } catch (e) {
         setAiErr('Ошибка ИИ: ' + (e instanceof Error ? e.message : String(e)));
       } finally {
@@ -735,34 +623,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
           >
             ↕ по элементу
           </button>
-          {/* Нумерованные шаги ручного workflow (сообщение заказчика 14.05). */}
           <span className="step-sep muted small" aria-hidden>│</span>
-          <button
-            className="step-btn"
-            onClick={fillElementsAi}
-            disabled={aiBusy || !hasKey}
-            title={
-              !hasKey
-                ? 'Укажите OpenAI ключ в «Настройках».'
-                : 'Шаг 1 (состав): ИИ выписывает Элементы/Подэлементы из источника/интернета по правилам заказчика — без крепежа, существ. в им.падеже ед.числе.'
-            }
-          >
-            {aiBusy ? '…' : '1. 🧩 Состав'}
-          </button>
-          <button
-            className="step-btn"
-            onClick={fillOperationsAi}
-            disabled={aiBusy || !hasKey || rows.length === 0}
-            title={
-              !hasKey
-                ? 'Укажите OpenAI ключ в «Настройках».'
-                : rows.length === 0
-                  ? 'Сначала выполните  1. Состав» или добавьте строки вручную.'
-                  : 'Шаг 2 (операции): ИИ выписывает операции на агрегат и на Элементы/Подэлементы. Замена→Демонтаж+Монтаж.'
-            }
-          >
-            {aiBusy ? '…' : '2. 🔧 Операции'}
-          </button>
           <button
             className="step-btn"
             onClick={fillByAi}
@@ -772,10 +633,10 @@ export function ModelCard({ modelId }: { modelId: string }) {
                 ? 'Укажите OpenAI ключ в «Настройках».'
                 : acts.length === 0
                   ? 'Добавьте хотя бы одно ВВ (вкладка «ВВ»).'
-                  : 'Шаг 3+ (ВВ/профессии/трудозатраты/ТМЦ): ИИ ищет в интернете типовые операции и ТМЦ под класс/подкласс и список ВВ.'
+                  : 'ИИ заполнит тех.карту целиком: состав, операции, трудозатраты, ТМЦ.'
             }
           >
-            {aiBusy ? '…ИИ работает' : '3. 🌐 Поиск в интернете'}
+            {aiBusy ? '…ИИ работает' : '🤖 Заполнить тех.карту'}
           </button>
           <span className="step-sep muted small" aria-hidden>│</span>
           <button
@@ -810,35 +671,11 @@ export function ModelCard({ modelId }: { modelId: string }) {
             )}
           </span>
         </div>
-        {(() => {
-          // Подсказка «следующий шаг» — заказчик (14.05): «состав получил, операции получил,
-          //  дальше что?». Подсказываем, что делать дальше.
-          const hasComp = rows.some((r) => r.component || r.isAggregate);
-          const hasOp = rows.some((r) => r.operation);
-          const hasAction = rows.some((r) => r.actionId);
-          const hasSpec = rows.some((r) => r.specialty);
-          const hasLabor = rows.some((r) => r.laborHours || r.totalLaborHours);
-          const hasTmc = rows.some((r) => r.tmcName);
-          let next: string;
-          if (!hasComp) next = 'Начните с «1. Состав» или добавьте строки вручную.';
-          else if (!hasOp) next = 'Следующий шаг: «2. Операции».';
-          else if (!hasAction) next = 'Следующий шаг: укажите ВВ в колонке «ВВ» (или добавьте во вкладке «ВВ»).';
-          else if (!hasSpec) next = 'Следующий шаг: укажите Профессию/Разряд.';
-          else if (!hasLabor) next = 'Следующий шаг: расставьте Трудозатраты (ч на профессию).';
-          else if (!hasTmc) next = 'Следующий шаг: выпишите ТМЦ (наименование + ед.изм. + кол-во).';
-          else next = 'Порядок выполнен. Добавьте остальные строки или перейдите на вкладку «Спецификации».';
-          return (
-            <div className={`status-banner status-${status?.tone ?? 'info'}`}>
-              <span className="status-next">{next}</span>
-              {status?.text && (
-                <>
-                  <span className="muted" style={{ margin: '0 6px' }}>·</span>
-                  <span>{status.text}</span>
-                </>
-              )}
-            </div>
-          );
-        })()}
+        {status && (
+          <div className={`status-banner status-${status.tone}`}>
+            {status.text}
+          </div>
+        )}
         {/* Прокрутка таблицы ограничена по высоте + свой скролл — горизонтальная
             полоса прокрутки всегда в видимой области (сообщение заказчика 14.05). */}
         <div
@@ -1614,6 +1451,14 @@ export function ModelCard({ modelId }: { modelId: string }) {
       }
     };
 
+    // Auto-suggest ВВ on tab open when list is empty
+    useEffect(() => {
+      if (items.length === 0 && getApiKey() && m.className) {
+        aiSuggest('web');
+      }
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
     return (
       <div>
         <div className="row-flex" style={{ gap: 6, marginBottom: 6 }}>
@@ -1860,14 +1705,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
                     : m.classificationSource === 'unresolved'
                       ? 'не определён'
                       : '—') +
-              // Процент показываем только для эвристик и ИИ — для прямой привязки
-              // и ручного выбора процент не имеет смысла (это всегда 100%).
-              (m.classificationConfidence !== undefined &&
-              m.classificationConfidence < 1 &&
-              m.classificationSource !== 'manual' &&
-              m.classificationSource !== 'unresolved'
-                ? ` · ${Math.round((m.classificationConfidence ?? 0) * 100)}%`
-                : '')
+              ''
             }
             readOnly
           />
@@ -1948,11 +1786,23 @@ export function ModelCard({ modelId }: { modelId: string }) {
             }
             onClick={async () => {
               try {
-                const docText = (m.documents ?? [])
-                  .map((d) => d.parsedText || '')
-                  .filter(Boolean)
-                  .join('\n')
-                  .slice(0, 4000);
+                // Get hierarchy path
+                const hierarchy = useStore.getState().hierarchy;
+                const collectPath = (node: any, targetId: string, path: string[]): string[] | null => {
+                  if (node.id === targetId) return [...path, node.name];
+                  for (const child of node.children || []) {
+                    const result = collectPath(child, targetId, [...path, node.name]);
+                    if (result) return result;
+                  }
+                  return null;
+                };
+                const pathNames = collectPath(hierarchy, m.nodeId, []);
+                const nodeContext = pathNames ? pathNames.filter(Boolean).join(' / ') : '';
+
+                const docText = [
+                  nodeContext ? `Расположение в иерархии: ${nodeContext}` : '',
+                  ...(m.documents ?? []).map((d) => d.parsedText || '').filter(Boolean),
+                ].filter(Boolean).join('\n').slice(0, 4000);
                 const proposals = await aiProvider().classify({
                   model: { rawCode: m.rawCode, normalizedCode: m.normalizedCode },
                   classes: classifier.classes,
@@ -2073,6 +1923,17 @@ export function ModelCard({ modelId }: { modelId: string }) {
         const newDocs: DocumentRef[] = [];
         for (const f of Array.from(files)) {
           const r = await extractTextFromFile(f);
+          // Сохраняем PDF в base64 для прямой отправки в AI API (vision)
+          let pdfBase64: string | undefined;
+          if (f.name.toLowerCase().endsWith('.pdf')) {
+            const buf = await f.arrayBuffer();
+            const bytes = new Uint8Array(buf);
+            let binary = '';
+            for (let i = 0; i < bytes.length; i++) {
+              binary += String.fromCharCode(bytes[i]);
+            }
+            pdfBase64 = btoa(binary);
+          }
           newDocs.push({
             id: newId('d'),
             url: f.name,
@@ -2080,6 +1941,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
             filename: f.name,
             parsedText: r.text,
             parsedAt: new Date().toISOString(),
+            pdfBase64,
           });
         }
         update(m.id, { documents: [...docs, ...newDocs] });
@@ -2308,22 +2170,6 @@ export function ModelCard({ modelId }: { modelId: string }) {
       setChars([...(m.characteristics ?? []), next]);
     };
 
-    const extractFromDocs = () => {
-      const docs = m.documents ?? [];
-      const fresh: Characteristic[] = [];
-      for (const d of docs) {
-        if (!d.parsedText) continue;
-        fresh.push(...parseCharacteristics(d.parsedText, cls, sub, d.id));
-      }
-      // Сохраняем зафиксированные экспертом значения, остальные — заменяем извлечёнными.
-      const locked = (m.characteristics ?? []).filter((c) => c.lockedByExpert);
-      const lockedKeys = new Set(locked.map((c) => c.key.toLowerCase()));
-      const filtered = fresh.filter(
-        (c) => !lockedKeys.has(c.key.toLowerCase()),
-      );
-      setChars([...locked, ...filtered]);
-    };
-
     const buildPriorityKeys = (): Array<{ key: string; unit?: string }> => {
       const keys: Array<{ key: string; unit?: string }> = [];
       for (const p of cls?.priorityChars ?? []) keys.push({ key: p.key, unit: p.unit });
@@ -2397,9 +2243,11 @@ export function ModelCard({ modelId }: { modelId: string }) {
         .map((d) => d.parsedText || '')
         .filter(Boolean)
         .join('\n\n');
-      if (!text.trim()) {
+      // Берём первый PDF base64 для прямой отправки в API
+      const pdfBase64 = docs.find((d) => d.pdfBase64)?.pdfBase64;
+      if (!text.trim() && !pdfBase64) {
         alert(
-          'Нет распознанного текста. Загрузите документ во вкладке «Документы».',
+          'Нет распознанного текста и нет PDF. Загрузите документ во вкладке «Документы».',
         );
         return;
       }
@@ -2414,6 +2262,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
         const items = await aiProvider().extractCharacteristics({
           text,
           keys,
+          pdfBase64,
         });
         if (!items.length) {
           alert('ИИ не нашёл значений в документе.');
@@ -2512,24 +2361,15 @@ export function ModelCard({ modelId }: { modelId: string }) {
             {dbBusy ? '⏳ Загрузка базы…' : '📚 Из базы моделей'}
           </button>
           <button
-            onClick={extractFromDocs}
-            disabled={!(m.documents ?? []).some((d) => d.parsedText)}
-            title="Парсить характеристики из распознанного текста документов"
-          >
-            Извлечь из документов
-          </button>
-          <button
             onClick={aiExtract}
-            disabled={
-              !getApiKey() || !(m.documents ?? []).some((d) => d.parsedText)
-            }
+            disabled={!getApiKey()}
             title={
               !getApiKey()
-                ? 'Подключите OpenAI ключ в кнопке «ИИ» в шапке'
-                : 'Извлечь характеристики через ИИ — фоллбек, если парсер пуст'
+                ? 'Подключите OpenAI ключ в «Настройках»'
+                : 'Извлечь характеристики через ИИ из загруженных документов (PDF отправляется напрямую)'
             }
           >
-            Извлечь через ИИ
+            Извлечь характеристики
           </button>
           <button
             onClick={enrichFromWeb}
@@ -3014,7 +2854,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
           </div>
         )}
 
-        <h4 style={{ margin: '8px 0 4px' }}>BOM — все ТМЦ (материалы + запчасти)</h4>
+        <h4 style={{ margin: '8px 0 4px' }}>Полная спецификация ТМЦ (зап.части и материалы)</h4>
         <table className="models">
           <thead>
             <tr>
@@ -3039,7 +2879,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
         </table>
 
         <h4 style={{ margin: '12px 0 4px' }}>
-          APL — запчасти в разрезе ВВ (без расходных материалов)
+          Зап.части в привязке к виду ТОиР
         </h4>
         {Array.from(aplGroups.values()).map((g, gi) => (
           <div key={gi} style={{ marginBottom: 8 }}>
@@ -3075,7 +2915,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
         ))}
 
         <h4 style={{ margin: '12px 0 4px' }}>
-          AOPL — детали в разрезе компонент агрегата
+          Зап.части в привязке к операции ТОиР
         </h4>
         {aoplGroups.size === 0 && (
           <div className="muted small">

@@ -138,7 +138,7 @@ function Inner({
               : 'Настройки (ИИ-ключ, картинки, сброс демо)'
           }
         >
-          Настройки{hasKey ? ` · ИИ $${usage.costUsd.toFixed(4)}` : ''}
+          Настройки
         </button>
       </header>
       <Toolbar />
