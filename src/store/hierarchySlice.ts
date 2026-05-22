@@ -4,7 +4,7 @@
 import type { StateCreator } from 'zustand';
 import type { HierarchyNode } from '../domain/types';
 import type { Store } from './types';
-import { clone, findNode, detach, walk, seedInitialExpanded, uid } from './helpers';
+import { clone, findNode, detach, seedInitialExpanded, uid } from './helpers';
 import {
   SEED_NORMALIZATION_RULES,
   SEED_REFERENCES,

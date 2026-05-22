@@ -11,7 +11,7 @@
  */
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
-import type { HierarchyNode, TOR, EquipmentModel } from '../domain/types';
+import type { TOR, EquipmentModel } from '../domain/types';
 import type { Store } from './types';
 import { createHierarchySlice } from './hierarchySlice';
 import { createModelsSlice } from './modelsSlice';
