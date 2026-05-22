@@ -695,6 +695,9 @@ ${sample ? '\n' + sample + '\n\nИспользуй этот пример как 
       'операции (отключить питание, вывесить табличку, установить ' +
       'ограждение). ' +
       '(12) Каждое ВВ покрыто 2–5 строками разных операций. ' +
+      '(12a) ВЫДАВАЙ строки строго в порядке списка ВВ во входных данных: ' +
+      'сначала все строки для первого ВВ (например, ТО-1), затем — для ' +
+      'второго (ТО-2), затем ТО-3, ТР-1, КР-1 и т.д. Не перемешивай. ' +
       '(13) Если у тебя нет уверенности в параметре — не включай строку. ' +
       'Минимум 10 реалистичных строк. ' +
       'Возвращай ТОЛЬКО json: {"rows":[ {...} ]} c полями: actionId, ' +
@@ -744,11 +747,29 @@ ${fewShot ? 'Эталон оформления (реальные строки и
     });
     if (!result?.rows) return [];
     const validActionIds = new Set(input.actions.map((a) => a.id));
+    // Карта «нормализованное имя ВВ → id», чтобы спасти строки, где модель
+    // вернула name вместо id, или сгаллюцинировала id с лишним пробелом/-/.
+    // Это лечит регресс, при котором все строки приходили без actionId и в
+    // ТК не отображалась привязка к виду воздействия.
+    const normName = (s: string) =>
+      s.toLowerCase().replace(/[\s\-_.]+/g, '').trim();
+    const byName = new Map<string, string>();
+    for (const a of input.actions) {
+      const k = normName(a.name);
+      if (k) byName.set(k, a.id);
+    }
+    const resolveActionId = (raw?: string): string | undefined => {
+      if (!raw) return undefined;
+      if (validActionIds.has(raw)) return raw;
+      // Если model вернула имя ВВ (например "ТО-1") вместо id — резолвим.
+      const byNameHit = byName.get(normName(raw));
+      if (byNameHit) return byNameHit;
+      return undefined;
+    };
     return result.rows
       .filter((x) => x.operation || x.component)
       .map((x) => ({
-        actionId:
-          x.actionId && validActionIds.has(x.actionId) ? x.actionId : undefined,
+        actionId: resolveActionId(x.actionId),
         component: x.component,
         subcomponent: x.subcomponent,
         operation: x.operation,
@@ -773,7 +794,25 @@ ${fewShot ? 'Эталон оформления (реальные строки и
         confidence:
           typeof x.confidence === 'number' ? x.confidence : undefined,
       }))
-      .slice(0, 60);
+      .slice(0, 60)
+      // Группируем по ВВ в порядке их объявления (ТО-1 → ТО-2 → ТР-1 → КР-1):
+      // тех.карта строится «на основе ВВ», как и просил заказчик. Строки без
+      // привязки уходят в конец, их порядок не меняется (стабильная сортировка).
+      .map((row, idx) => ({ row, idx }))
+      .sort((a, b) => {
+        const ra = a.row.actionId
+          ? input.actions.findIndex((x) => x.id === a.row.actionId)
+          : -1;
+        const rb = b.row.actionId
+          ? input.actions.findIndex((x) => x.id === b.row.actionId)
+          : -1;
+        // Без привязки — в конец списка.
+        const ka = ra < 0 ? Number.MAX_SAFE_INTEGER : ra;
+        const kb = rb < 0 ? Number.MAX_SAFE_INTEGER : rb;
+        if (ka !== kb) return ka - kb;
+        return a.idx - b.idx;
+      })
+      .map(({ row }) => row);
   },
 
   async fillElementsAndSubelements(input) {

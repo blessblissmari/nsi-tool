@@ -451,6 +451,28 @@ export function ModelCard({ modelId }: { modelId: string }) {
       });
       setTechCard(modelId, sorted);
     };
+    // Сортировка по ВВ в порядке их объявления (ТО-1 → ТО-2 → ТР-1 → КР-1).
+    // Тех.карта «строится на основе ВВ» (просьба заказчика, см. созвон):
+    // сначала идут все операции для первого ВВ, затем для второго и т.д.
+    // Строки без привязки — в конец, их порядок сохраняется (стабильная сортировка).
+    const sortByAction = () => {
+      const rank = (id?: string) => {
+        if (!id) return Number.MAX_SAFE_INTEGER;
+        const i = acts.findIndex((a) => a.id === id);
+        return i < 0 ? Number.MAX_SAFE_INTEGER : i;
+      };
+      const sorted = [...allRows]
+        .map((row, idx) => ({ row, idx }))
+        .sort((a, b) => {
+          const ra = rank(a.row.actionId);
+          const rb = rank(b.row.actionId);
+          if (ra !== rb) return ra - rb;
+          // В рамках одного ВВ — стабильно по исходному порядку.
+          return a.idx - b.idx;
+        })
+        .map(({ row }) => row);
+      setTechCard(modelId, sorted);
+    };
     // Автодедуп вынесён в store (`dedupeTechCard`) и вызывается после любой
     // пачки вставок (ИИ, ручные правки на onBlur ключевых полей, массовая нормализация).
     // Кнопка «убрать дубли» убрана по просьбе заказчика 14.05.
@@ -623,6 +645,13 @@ export function ModelCard({ modelId }: { modelId: string }) {
           >
             ↕ по элементу
           </button>
+          <button
+            onClick={sortByAction}
+            disabled={rows.length === 0 || acts.length === 0}
+            title="Сортировать строки в порядке ВВ (ТО-1 → ТО-2 → ТР-1 → КР-1). Строки без привязки уйдут в конец."
+          >
+            ↕ по ВВ
+          </button>
           <span className="step-sep muted small" aria-hidden>│</span>
           <button
             className="step-btn"
@@ -697,6 +726,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
                 <th style={{ width: 70 }}>Период, ч</th>
                 <th style={{ width: 130 }}>Профессия</th>
                 <th style={{ width: 60 }}>Разряд</th>
+                <th style={{ width: 60 }} title="Минимальное количество исполнителей операции.">Кол-во чел.</th>
                 <th style={{ width: 70 }} title="Трудозатраты на отдельную профессию (чел/ч).">Трудозатр.,ч</th>
                 <th style={{ width: 140 }}>ТМЦ</th>
                 <th style={{ width: 50 }}>Ед.</th>
@@ -708,7 +738,7 @@ export function ModelCard({ modelId }: { modelId: string }) {
             <tbody>
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={13} className="muted small">
+                  <td colSpan={14} className="muted small">
                     Нет строк. Добавьте «+ строка» либо привяжите ВВ
                     (вкладка «ВВ»). Справочники операций, специальностей и
                     стандартных операций — через «Загрузить».
@@ -724,8 +754,6 @@ export function ModelCard({ modelId }: { modelId: string }) {
                 const tipParts: string[] = [];
                 if (r.subcomponent) tipParts.push(`Подэлемент: ${r.subcomponent}`);
                 if (r.workDescription) tipParts.push(`Содержание: ${r.workDescription}`);
-                if (typeof r.workers === 'number')
-                  tipParts.push(`Исполнителей: ${r.workers}`);
                 if (typeof r.totalLaborHours === 'number')
                   tipParts.push(`Трудоёмкость: ${r.totalLaborHours} чел/ч`);
                 if (r.tools) tipParts.push(`Инструмент: ${r.tools}`);
@@ -863,6 +891,32 @@ export function ModelCard({ modelId }: { modelId: string }) {
                           }
                         />
                       )}
+                    </td>
+                    <td>
+                      <input
+                        type="number"
+                        min="1"
+                        step="1"
+                        value={r.workers ?? ''}
+                        title="Минимальное количество исполнителей."
+                        onChange={(e) => {
+                          const n = e.target.value
+                            ? parseInt(e.target.value, 10)
+                            : undefined;
+                          // Если задана норма часов — пересчитываем суммарную
+                          // трудоёмкость (чел/ч = laborHours × workers).
+                          const lh = r.laborHours;
+                          const total =
+                            typeof lh === 'number' && typeof n === 'number'
+                              ? Math.round(lh * n * 100) / 100
+                              : r.totalLaborHours;
+                          upsert(modelId, {
+                            id: r.id,
+                            workers: n,
+                            totalLaborHours: total,
+                          });
+                        }}
+                      />
                     </td>
                     <td>
                       <input
@@ -1694,21 +1748,38 @@ export function ModelCard({ modelId }: { modelId: string }) {
         </label>
         <label>
           Источник
-          <input
-            value={
-              (m.classificationSource === 'classifier'
-                ? 'классификатор'
-                : m.classificationSource === 'manual'
-                  ? 'ручной'
-                  : m.classificationSource === 'ai'
-                    ? 'ИИ'
-                    : m.classificationSource === 'unresolved'
-                      ? 'не определён'
-                      : '—') +
-              ''
-            }
-            readOnly
-          />
+          {(() => {
+            const src = m.classificationSource;
+            // Маппим в внутренний SourceKind для CSS-чипа (src-classifier/ai/manual).
+            // unresolved/undefined → нейтральный «manual» серый чип, но с другим текстом.
+            const chipKind =
+              src === 'classifier' ? 'classifier'
+              : src === 'ai' ? 'ai'
+              : src === 'manual' ? 'manual'
+              : 'manual';
+            const label =
+              src === 'classifier' ? 'классификатор'
+              : src === 'manual' ? 'ручной'
+              : src === 'ai' ? 'ИИ'
+              : src === 'unresolved' ? 'не определён'
+              : '—';
+            const conf = m.classificationConfidence;
+            const confTxt =
+              typeof conf === 'number'
+                ? ` · ${Math.round(conf * 100)}%`
+                : '';
+            return (
+              <div className="src-chip-wrap">
+                <span
+                  className={`src-chip src-${chipKind}`}
+                  title={`Источник классификации${confTxt}`}
+                >
+                  {label}
+                  {confTxt}
+                </span>
+              </div>
+            );
+          })()}
         </label>
         <label>
           Класс

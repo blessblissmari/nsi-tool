@@ -770,6 +770,22 @@ table.models tr.src-classifier > td { background: #fff0e6; }
 .src-chip.src-manual   { background: #f3f3f3; }
 .src-chip.src-classifier { background: #ffd9bf; }
 
+/* Обёртка для чипа «Источник классификации» в шапке карточки модели —
+   выравнивает его по высоте и отступам с соседними <input>-полями. */
+.src-chip-wrap {
+  display: flex;
+  align-items: center;
+  height: 26px;
+  margin-top: 2px;
+  padding: 0;
+}
+.src-chip-wrap > .src-chip {
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-weight: 500;
+}
+
 /* Подсветка нарушения правил нормализации в Элемент/Подэлемент. */
 table.models input.warn {
   background: #fff0e6;
